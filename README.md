@@ -145,8 +145,8 @@ How it works:
 1. **Two thresholds, position and rotation separately** — rotation at distance is what ruins a
    shot, so it is tuned on its own.
 2. **Below the threshold** the hand is only trembling → heavy smoothing, gun locked.
-3. **Above the threshold** the movement is deliberate → the raw pose passes straight through,
-   1:1, so the gun tracks exactly like a mouse.
+3. **Above the threshold** the movement is deliberate → the filter opens up to `cut_move`
+   (default 8 Hz ≈ 20 ms). Never raw: fast movement is still filtered, so no jitter at speed.
 4. **Asymmetric attack/release** — unlock in ~40 ms (no delay when switching targets), re-lock in
    ~200 ms (a soft landing instead of a snap).
 
@@ -162,10 +162,39 @@ The intent signal is the magnitude of the **low-passed velocity vector**, not `|
 
 ### And why stopping no longer glides
 
-While released, the filter state is pushed **fully onto the raw pose**. So when you stop, there
-is no leftover error to creep away — the bubble closes over a gun that is already where your hand
-is. The old exponential slide (settle time `1/(2π·cutoff)`, seconds of drift at 0.05 Hz) had to
-choose between smooth and usable. This does not.
+Two things used to cause that float, and both are now fixed by construction:
+
+1. **The release bypassed the filter.** `y += rel * (x - y)` made the output *raw* at speed — that
+   is the jitter you felt when moving fast. Now the release only raises the cutoff to a **floor**
+   (`cut_move`, default 8 Hz ≈ 20 ms), so a fast move is still filtered.
+2. **A growing lag had nothing to pull it back.** Now a *second* trigger opens the bubble: the
+   **low-passed residual** (`err_tol_rot`, `err_tol_pos`). A tremor alternates sign and averages
+   out of that filter; a real lag does not. So the bubble stays open until the gun has actually
+   caught up, then closes.
+
+### Why it cannot overshoot the target
+
+This is the part you asked about. Overshoot is **not** possible in this design, by construction:
+
+- Every update is a convex combination (`y += a·(x − y)`, `a ∈ (0,1]`) or a slerp that only moves
+  *towards* the hand quaternion. A weighted average can never land beyond its inputs. First-order
+  in, first-order out — no ringing, no passing the hand.
+- The only thing that *could* overshoot is extrapolation: predicting the pose from velocity
+  (`predict_ms`) or pushing the output past the last sample. That is why `predict_ms=0`. There is
+  no prediction anywhere in the chain.
+- The old build's "float" was not overshoot — it was the slow asymptotic tail of a 0.05 Hz cutoff
+  (settle time `1/(2π·cutoff)` ≈ seconds). Big move → big residual → a multi-second crawl. The
+  `err_tol_*` trigger keeps the cutoff high until that residual is gone, which is what removes it.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `cut_move` | 8.0 Hz | lowest cutoff at full release — lower = smoother at speed, more drag |
+| `err_tol_rot` | 2.5 deg | persistent lag that counts as falling behind (lower = catches up harder) |
+| `err_tol_pos` | 1.5 cm | same, for position |
+| `err_hz` | 1.5 Hz | residual low-pass — slow, so only a *persistent* lag passes it |
+
+> If the aim feels like it never quite settles, **lower** `err_tol_rot` (2.0 → 1.5). If it feels
+> like it is stuck to your hand and you want the extra weight back, **raise** it (3.5 → 5).
 
 > Reference values from elsewhere: Meta's Interaction SDK ships its wrist-rotation one-euro
 > filter at `minCutoff 2.0 Hz, beta 3.0` — the 0.05 Hz we were using earlier is 40× heavier than

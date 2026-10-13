@@ -35,6 +35,16 @@ static double g_relSpan   = 1.5;    // fully released at threshold * span
 static double g_attackMs  = 200.0;  // re-lock time after you stop
 static double g_releaseMs = 40.0;   // unlock time when you move
 static double g_intentHz  = 6.0;    // low-pass on the velocity vector (tremor is 4-12 Hz)
+// Second release trigger: a lag that PERSISTS. Low-passed on purpose - a tremor alternates
+// sign so it averages out, while "the gun is still behind my hand" does not. This is what
+// removes the float: the bubble stays open until the residual is caught, then closes.
+static double g_cutMove   = 8.0;    // Hz  - lowest cutoff while released. Never raw: 8 Hz is
+                                    //       20 ms, fast enough to track, slow enough to kill jitter
+static double g_errTolPos = 0.015;  // m   - persistent lag that counts as falling behind
+static double g_errTolRot = 0.044;  // rad - same, rotation (~2.5 deg)
+static double g_errHz     = 1.5;    // Hz  - slow, so only a real lag passes this filter
+
+static inline double ErrMag(const double* v) { return sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]); }
 
 // how far outside its bubble the hand is moving: 0 = inside (tremor), 1 = deliberate
 static inline double BubbleTarget(double intent, double thresh) {
@@ -59,11 +69,12 @@ struct OneEuroVec3 {
     double dy[3] = { 0, 0, 0 };   // filtered derivative
     double xp[3] = { 0, 0, 0 };   // previous raw input (intent velocity needs it)
     double iv[3] = { 0, 0, 0 };   // low-passed intent velocity
-    double rel = 0.0;             // 0 = locked (smooth), 1 = released (raw passthrough)
+    double er[3] = { 0, 0, 0 };   // low-passed signed residual (the persistent-lag detector)
+    double rel = 0.0;             // 0 = locked (smooth), 1 = released (follows the hand)
 
     void reset() {
         init = xset = false; rel = 0.0;
-        for (int i = 0; i < 3; i++) { dy[i] = 0.0; iv[i] = 0.0; }
+        for (int i = 0; i < 3; i++) { dy[i] = 0.0; iv[i] = 0.0; er[i] = 0.0; }
     }
     double release() const { return rel; }
 
@@ -86,7 +97,12 @@ struct OneEuroVec3 {
             }
             intent = sqrt(intent);
 
-            // ---- the one-euro low-pass itself (unchanged) ----
+            // ---- release: fast movement OR a persistent lag opens the bubble ----
+            double t1 = BubbleTarget(intent, g_relPos);           // deliberate movement
+            double t2 = BubbleTarget(ErrMag(er), g_errTolPos);    // falling behind
+            rel = BubbleChase(rel, (t1 > t2 ? t1 : t2), dt);
+
+            // ---- the one-euro low-pass itself ----
             double ad = OneEuroAlpha(dCut, dt);
             double speed2 = 0.0;
             for (int i = 0; i < 3; i++) {
@@ -95,12 +111,18 @@ struct OneEuroVec3 {
                 speed2 += dy[i] * dy[i];
             }
             double cut = minCut + beta * sqrt(speed2);
+            // Released => the cutoff may only RISE, up to g_cutMove. There is no raw
+            // passthrough, so a fast move is still filtered (no jitter) and, because this is
+            // still a first-order approach, the output can never pass the hand position.
+            double floorCut = minCut + (g_cutMove - minCut) * rel;
+            if (floorCut > cut) cut = floorCut;
             double a = OneEuroAlpha(cut, dt);
             for (int i = 0; i < 3; i++) y[i] = a * (double)x[i] + (1.0 - a) * y[i];
 
-            // ---- bubble: deliberate movement passes straight through ----
-            rel = BubbleChase(rel, BubbleTarget(intent, g_relPos), dt);
-            if (rel > 0.0) for (int i = 0; i < 3; i++) y[i] += ((double)x[i] - y[i]) * rel;
+            // how far behind we still are, low-passed: an oscillation cancels out here
+            double ae = OneEuroAlpha(g_errHz, dt);
+            for (int i = 0; i < 3; i++)
+                er[i] = ae * ((double)x[i] - y[i]) + (1.0 - ae) * er[i];
         }
         for (int i = 0; i < 3; i++) {
             double v = y[i];
@@ -116,10 +138,11 @@ struct OneEuroQuat {
     double q[4] = { 0, 0, 0, 1 };
     double qp[4] = { 0, 0, 0, 1 };   // previous raw input
     double iv[3] = { 0, 0, 0 };      // low-passed intent angular velocity (rad/s)
-    double rel = 0.0;                // 0 = locked (smooth), 1 = released (raw passthrough)
+    double erAng = 0.0;              // low-passed residual angle (the persistent-lag detector)
+    double rel = 0.0;                // 0 = locked (smooth), 1 = released (follows the hand)
 
     void reset() {
-        init = qset = false; rel = 0.0;
+        init = qset = false; rel = 0.0; erAng = 0.0;
         for (int i = 0; i < 3; i++) iv[i] = 0.0;
     }
     double release() const { return rel; }
@@ -166,13 +189,23 @@ struct OneEuroQuat {
             }
             double intent = sqrt(iv[0]*iv[0] + iv[1]*iv[1] + iv[2]*iv[2]);
 
-            // ---- the one-euro low-pass itself (unchanged) ----
+            // ---- release: fast rotation OR a persistent lag opens the bubble ----
+            double t1 = BubbleTarget(intent, g_relRot);            // deliberate rotation
+            double t2 = BubbleTarget(erAng, g_errTolRot);          // falling behind
+            rel = BubbleChase(rel, (t1 > t2 ? t1 : t2), dt);
+
+            // ---- the one-euro low-pass itself ----
             double d = q[0]*n[0] + q[1]*n[1] + q[2]*n[2] + q[3]*n[3];
             if (d < 0) { for (int i = 0; i < 4; i++) n[i] = -n[i]; d = -d; }
             if (d > 1.0) d = 1.0;
             double angle = 2.0 * acos(d);           // rad between samples
             double speed = angle / dt;              // rad/s
             double cut = minCut + beta * speed;     // beta here is per rad/s
+            // Released => the cutoff may only RISE, up to g_cutMove. No raw passthrough: a fast
+            // swing is still filtered (no jitter), and slerp only ever moves TOWARDS the hand,
+            // so the aim cannot pass it.
+            double floorCut = minCut + (g_cutMove - minCut) * rel;
+            if (floorCut > cut) cut = floorCut;
             double a = OneEuroAlpha(cut, dt);
 
             if (d > 0.9995) {
@@ -183,20 +216,13 @@ struct OneEuroQuat {
                 for (int i = 0; i < 4; i++) q[i] = w1 * q[i] + w2 * n[i];
             }
 
-            // ---- bubble: deliberate rotation passes straight through ----
-            rel = BubbleChase(rel, BubbleTarget(intent, g_relRot), dt);
-            if (rel > 0.0) {
-                double d2 = q[0]*n[0] + q[1]*n[1] + q[2]*n[2] + q[3]*n[3];
-                if (d2 < 0) d2 = -d2;
-                if (d2 > 1.0) d2 = 1.0;
-                if (d2 > 0.9995) {
-                    for (int i = 0; i < 4; i++) q[i] += rel * (n[i] - q[i]);
-                } else {
-                    double th = acos(d2), s = sin(th);
-                    double w1 = sin((1.0 - rel) * th) / s, w2 = sin(rel * th) / s;
-                    for (int i = 0; i < 4; i++) q[i] = w1 * q[i] + w2 * n[i];
-                }
-            }
+            // how far the aim still is from the hand (rad), low-passed: an alternating tremor
+            // averages out here and only a real, sustained lag survives
+            double dr = q[0]*n[0] + q[1]*n[1] + q[2]*n[2] + q[3]*n[3];
+            if (dr < 0) dr = -dr;
+            if (dr > 1.0) dr = 1.0;
+            double ae = OneEuroAlpha(g_errHz, dt);
+            erAng = ae * (2.0 * acos(dr)) + (1.0 - ae) * erAng;
 
             double l2 = sqrt(q[0]*q[0] + q[1]*q[1] + q[2]*q[2] + q[3]*q[3]);
             if (l2 > 1e-9) for (int i = 0; i < 4; i++) q[i] /= l2;

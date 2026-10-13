@@ -62,8 +62,10 @@ struct Cfg {
     // separate filter profile used ONLY while two-hand mode is active.
     // 0 == "use the normal zoom profile instead"
     double thMinCutoff, thBeta, thMinCutoffRot, thBetaRot;
-    // ---- "bubble" release: heavy smoothing while still, raw passthrough while moving ----
+    // ---- "bubble" release: heavy smoothing while still, full tracking while moving ----
     double relPos, relRot, relSpan, attackMs, releaseMs, intentHz;
+    // second trigger (persistent lag) + the cutoff floor that keeps fast movement filtered
+    double cutMove, errTolPos, errTolRot, errHz;
 };
 static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
                       1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
@@ -153,9 +155,20 @@ static void LoadCfg() {
     if (g_cfg.relPos  < 0.0)  g_cfg.relPos  = 0.0;
     if (g_cfg.relRot  < 0.0)  g_cfg.relRot  = 0.0;
     if (g_cfg.intentHz < 0.5) g_cfg.intentHz = 0.5;
+    // ---- anti-float + always-some-smoothing ----
+    g_cfg.cutMove   = CfgD("cut_move", 8.0);       // Hz  - lowest cutoff at full release
+    g_cfg.errTolPos = CfgD("err_tol_pos", 1.5);    // cm  - lag that counts as falling behind
+    g_cfg.errTolRot = CfgD("err_tol_rot", 2.5);    // deg
+    g_cfg.errHz     = CfgD("err_hz", 1.5);         // Hz  - residual low-pass (slow = persistent)
+    if (g_cfg.cutMove < 0.5) g_cfg.cutMove = 0.5;
+    if (g_cfg.errHz   < 0.1) g_cfg.errHz   = 0.1;
     g_relPos = g_cfg.relPos;   g_relRot    = g_cfg.relRot;
     g_relSpan = g_cfg.relSpan; g_attackMs  = g_cfg.attackMs;
     g_releaseMs = g_cfg.releaseMs; g_intentHz = g_cfg.intentHz;
+    g_cutMove   = g_cfg.cutMove;
+    g_errTolPos = g_cfg.errTolPos / 100.0;          // cm -> m
+    g_errTolRot = g_cfg.errTolRot * kPi / 180.0;    // deg -> rad
+    g_errHz     = g_cfg.errHz;
 }
 
 // ---------- smoothing state ----------

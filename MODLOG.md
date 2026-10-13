@@ -378,3 +378,17 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
   separate from the trigger/zoom block - they never combine.
 - Diagnosis: the 20x/60x zoom profile only applies while the trigger is held >= 0.5, so a
   pistol tap-to-shoot never triggered it (that is what the bubble now covers).
+
+## Anti-float release + no-jitter at speed
+
+- The release no longer bypasses the filter. `y += rel*(x-y)` handed the RAW pose through
+  while moving, which is what made fast moves jittery. The release now only raises the
+  cutoff to a FLOOR (`cut_move`, default 8 Hz = 20 ms) - always filtered, never raw.
+- Added a second bubble trigger: the LOW-PASSED residual (`err_tol_rot`/`err_tol_pos`,
+  `err_hz`). A tremor alternates sign and averages out of that filter, a real lag does not.
+  The bubble therefore stays open until the gun has caught up - this is what removes the
+  float/glide tail left behind after a big move.
+- Overshoot is impossible by construction: every update is a convex combination or a slerp
+  that only moves toward the hand quaternion, and predict_ms stays 0 (extrapolation is the
+  only thing that could pass the target).
+- New keys: cut_move, err_tol_rot, err_tol_pos, err_hz.
