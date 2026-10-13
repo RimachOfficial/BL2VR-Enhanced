@@ -62,17 +62,12 @@ struct Cfg {
     // separate filter profile used ONLY while two-hand mode is active.
     // 0 == "use the normal zoom profile instead"
     double thMinCutoff, thBeta, thMinCutoffRot, thBetaRot;
-    // ---- "bubble" release: heavy smoothing while still, full tracking while moving ----
-    double relPos, relRot, relSpan, attackMs, releaseMs, intentHz;
-    // second trigger (persistent lag) + the cutoff floor that keeps fast movement filtered
-    double cutMove, errTolPos, errTolRot, errHz;
 };
 static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
                       1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
                       0 /*twohandHand: 0=offhand,1=gun hand*/,
                       0.12, 0.75, 1.0,
-                      0.25, 0.10, 0.05, 0.02,
-                      0.13, 0.54, 1.5, 200.0, 40.0, 6.0 };
+                      1.5, 8.0, 1.0, 6.0 };
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
@@ -137,38 +132,10 @@ static void LoadCfg() {
     if (g_cfg.twohandBlend < 0.0) g_cfg.twohandBlend = 0.0;
     if (g_cfg.twohandBlend > 1.0) g_cfg.twohandBlend = 1.0;
     // two-hand-only filter profile (0 = fall back to the zoom profile)
-    g_cfg.thMinCutoff    = CfgD("twohand_min_cutoff", 0.25);
-    g_cfg.thBeta         = CfgD("twohand_beta", 0.10);
-    g_cfg.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 0.05);
-    g_cfg.thBetaRot      = CfgD("twohand_beta_rot", 0.02);
-
-    // ---- bubble / release ----
-    // Below the threshold the hand is only trembling -> smooth hard.
-    // Above it the movement is deliberate -> the raw pose goes straight through.
-    g_cfg.relPos      = CfgD("release_pos", 0.13);     // m/s
-    g_cfg.relRot      = CfgD("release_rot", 0.54);     // rad/s
-    g_cfg.relSpan     = CfgD("release_span", 1.5);     // fully released at threshold * span
-    g_cfg.attackMs    = CfgD("attack_ms", 200.0);      // re-lock time after you stop
-    g_cfg.releaseMs   = CfgD("release_ms", 40.0);      // unlock time when you move
-    g_cfg.intentHz    = CfgD("intent_hz", 6.0);        // low-pass on the velocity vector
-    if (g_cfg.relSpan < 1.1)  g_cfg.relSpan = 1.1;
-    if (g_cfg.relPos  < 0.0)  g_cfg.relPos  = 0.0;
-    if (g_cfg.relRot  < 0.0)  g_cfg.relRot  = 0.0;
-    if (g_cfg.intentHz < 0.5) g_cfg.intentHz = 0.5;
-    // ---- anti-float + always-some-smoothing ----
-    g_cfg.cutMove   = CfgD("cut_move", 8.0);       // Hz  - lowest cutoff at full release
-    g_cfg.errTolPos = CfgD("err_tol_pos", 1.5);    // cm  - lag that counts as falling behind
-    g_cfg.errTolRot = CfgD("err_tol_rot", 2.5);    // deg
-    g_cfg.errHz     = CfgD("err_hz", 1.5);         // Hz  - residual low-pass (slow = persistent)
-    if (g_cfg.cutMove < 0.5) g_cfg.cutMove = 0.5;
-    if (g_cfg.errHz   < 0.1) g_cfg.errHz   = 0.1;
-    g_relPos = g_cfg.relPos;   g_relRot    = g_cfg.relRot;
-    g_relSpan = g_cfg.relSpan; g_attackMs  = g_cfg.attackMs;
-    g_releaseMs = g_cfg.releaseMs; g_intentHz = g_cfg.intentHz;
-    g_cutMove   = g_cfg.cutMove;
-    g_errTolPos = g_cfg.errTolPos / 100.0;          // cm -> m
-    g_errTolRot = g_cfg.errTolRot * kPi / 180.0;    // deg -> rad
-    g_errHz     = g_cfg.errHz;
+    g_cfg.thMinCutoff    = CfgD("twohand_min_cutoff", 1.5);
+    g_cfg.thBeta         = CfgD("twohand_beta", 8.0);
+    g_cfg.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 1.0);
+    g_cfg.thBetaRot      = CfgD("twohand_beta_rot", 6.0);
 }
 
 // ---------- smoothing state ----------

@@ -392,3 +392,16 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
   that only moves toward the hand quaternion, and predict_ms stays 0 (extrapolation is the
   only thing that could pass the target).
 - New keys: cut_move, err_tol_rot, err_tol_pos, err_hz.
+
+## Reverted the bubble - back to a plain always-on interpolator
+
+- Removed the swarm of threshold logic (release_*, attack_ms, release_ms, intent_hz,
+  cut_move, err_tol_*, err_hz). Restored filters.h/ovrhook.cpp to the pre-bubble state.
+- Why it had to go: any speed/error threshold is crossed several times a second while
+  tracking a moving enemy, so the filter toggles on/off -> lurch, plus the release ramp
+  gives a slow boat-like start. There is no smooth way to switch, only not to switch.
+- The cut_move floor was also CANCELLING the trigger profile smoothing, which is why
+  "trigger only" felt unsmoothed.
+- Retuned so nothing drifts: base rot 1.5 Hz (0.11 s), trigger 0.375 Hz (0.42 s) via
+  zoom_mult_rot=4, two-hand rot 0.4 Hz (0.40 s). No more 0.05 Hz (3.2 s) drift.
+- predict_ms stays 0: extrapolation is the only thing that could overshoot.

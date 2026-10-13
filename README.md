@@ -109,15 +109,10 @@ means much less input noise. The idea is *very steady at rest, still fast enough
 
 | Key | Default | Meaning |
 |---|---|---|
-Two-hand mode now also runs through the bubble (below), so these values are mostly about how
-steady the *locked* gun is — the bubble is what lets you still track with them this low.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `twohand_min_cutoff` | 0.25 | heavy low-pass on the hands while locked |
-| `twohand_beta` | 0.10 | one-euro speed term (keep low for a pure slide) |
-| `twohand_min_cutoff_rot` | 0.05 | rotation equivalent |
-| `twohand_beta_rot` | 0.02 | rotation equivalent |
+| `twohand_min_cutoff` | 0.8 | smoothing on the hands while two-handing |
+| `twohand_beta` | 1.0 | one-euro speed term (higher = catches up sooner) |
+| `twohand_min_cutoff_rot` | 0.4 | rotation equivalent |
+| `twohand_beta_rot` | 0.6 | rotation equivalent |
 
 **These two blocks never combine.** While two-hand mode is active, the two-hand block *replaces*
 the trigger/zoom block entirely — so a pistol one-handed (trigger only) keeps its own tuning, and
@@ -125,76 +120,53 @@ two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall 
 
 ---
 
-## The bubble (why this no longer feels like a laggy filter)
+## How the smoothing works
 
-A plain low-pass forces one knob to do two opposite jobs: "steady when still" and "stops and
-tracks without lag". Those fight. Everything in this section replaces that trade-off.
+It is a **plain interpolator**, and that is deliberate. Every frame it moves the gun a fixed
+fraction of the way towards your hand:
 
-The technique is taken from **`HandStabilizer` for H3VR**, which solves the same problem
-(gun tremor, CQB → 1000 m sniping):
+```
+gun += (hand - gun) * a          a = 1 / (1 + tau/dt),   tau = 1 / (2*pi*cutoff)
+```
 
-| Their setting | Value | Our equivalent |
+That is exactly the graph you described: the gun always **lags behind**, **accelerates towards**
+the latest movement, and asymptotically settles onto it. Two properties matter:
+
+- **It can never pass your hand.** Every step is a weighted average of where the gun is and where
+  your hand is, so the output is always *between* the two. No ringing, no overshoot, no lurch.
+- **There is no prediction anywhere.** `predict_ms=0`, and it should stay `0` — extrapolation is
+  the only thing in a chain like this that *can* overshoot the target.
+
+`min_cutoff` is the smoothing strength. `beta` raises the cutoff while you are moving, which is
+what lets it catch up faster during a fast sweep instead of trailing badly.
+
+### Turn `min_cutoff` into settle time
+
+```
+settle = 1 / (2*pi*cutoff)
+```
+
+| cutoff | settle | feel |
 |---|---|---|
-| Angular Threshold | 0.54 rad/s | `release_rot=0.54` |
-| Position Threshold | 0.13 | `release_pos=0.13` |
-| Attack | 0.20 (soft re-lock) | `attack_ms=200` |
-| Release | 0.04 (fast unlock) | `release_ms=40` |
+| 0.05 Hz | 3.2 s | drifts away — the float |
+| 0.4 Hz | 0.40 s | heavy, deliberate weight |
+| 0.67 Hz | 0.24 s | smooth but trackable ← trigger default |
+| 1.5 Hz | 0.11 s | light, always-on base smoothing |
+| 3.0 Hz | 0.05 s | close to raw |
 
-How it works:
+Pick the lowest value you can still aim with. Lower buys steadiness and costs drift.
 
-1. **Two thresholds, position and rotation separately** — rotation at distance is what ruins a
-   shot, so it is tuned on its own.
-2. **Below the threshold** the hand is only trembling → heavy smoothing, gun locked.
-3. **Above the threshold** the movement is deliberate → the filter opens up to `cut_move`
-   (default 8 Hz ≈ 20 ms). Never raw: fast movement is still filtered, so no jitter at speed.
-4. **Asymmetric attack/release** — unlock in ~40 ms (no delay when switching targets), re-lock in
-   ~200 ms (a soft landing instead of a snap).
+### Do not add a speed/error threshold
 
-### Why the intent signal must be *signed*
+The one thing that must not come back is a **threshold that switches the filter on and off** (a
+"bubble"). Tracking a moving enemy puts the hand speed right on top of any such threshold, so it
+toggles several times a second — and every toggle is a lurch, plus a "boat" feeling on the way in
+because the release has to ramp before it does anything. There is no smooth way to switch; only
+not to switch.
 
-The intent signal is the magnitude of the **low-passed velocity vector**, not `|Δangle|/dt`:
-
-- A tremor is an **oscillation** at 4–12 Hz. Its velocity vectors point both ways, so they
-  cancel out and the low-passed vector stays ~0 → correctly ignored as tremor.
-- `|Δangle|/dt` **cannot** do this: the magnitude of an oscillation has a non-zero mean, so a
-  yaw tremor looks exactly like deliberate movement. That is why the old build was jittery no
-  matter what the cutoff was.
-
-### And why stopping no longer glides
-
-Two things used to cause that float, and both are now fixed by construction:
-
-1. **The release bypassed the filter.** `y += rel * (x - y)` made the output *raw* at speed — that
-   is the jitter you felt when moving fast. Now the release only raises the cutoff to a **floor**
-   (`cut_move`, default 8 Hz ≈ 20 ms), so a fast move is still filtered.
-2. **A growing lag had nothing to pull it back.** Now a *second* trigger opens the bubble: the
-   **low-passed residual** (`err_tol_rot`, `err_tol_pos`). A tremor alternates sign and averages
-   out of that filter; a real lag does not. So the bubble stays open until the gun has actually
-   caught up, then closes.
-
-### Why it cannot overshoot the target
-
-This is the part you asked about. Overshoot is **not** possible in this design, by construction:
-
-- Every update is a convex combination (`y += a·(x − y)`, `a ∈ (0,1]`) or a slerp that only moves
-  *towards* the hand quaternion. A weighted average can never land beyond its inputs. First-order
-  in, first-order out — no ringing, no passing the hand.
-- The only thing that *could* overshoot is extrapolation: predicting the pose from velocity
-  (`predict_ms`) or pushing the output past the last sample. That is why `predict_ms=0`. There is
-  no prediction anywhere in the chain.
-- The old build's "float" was not overshoot — it was the slow asymptotic tail of a 0.05 Hz cutoff
-  (settle time `1/(2π·cutoff)` ≈ seconds). Big move → big residual → a multi-second crawl. The
-  `err_tol_*` trigger keeps the cutoff high until that residual is gone, which is what removes it.
-
-| Key | Default | Meaning |
-|---|---|---|
-| `cut_move` | 8.0 Hz | lowest cutoff at full release — lower = smoother at speed, more drag |
-| `err_tol_rot` | 2.5 deg | persistent lag that counts as falling behind (lower = catches up harder) |
-| `err_tol_pos` | 1.5 cm | same, for position |
-| `err_hz` | 1.5 Hz | residual low-pass — slow, so only a *persistent* lag passes it |
-
-> If the aim feels like it never quite settles, **lower** `err_tol_rot` (2.0 → 1.5). If it feels
-> like it is stuck to your hand and you want the extra weight back, **raise** it (3.5 → 5).
+A single always-on interpolator has no state to flip, so it has no jerk. It also cannot *cancel*
+another profile's smoothing the way a release floor does (that is what made "trigger only" feel
+unsmoothed).
 
 > Reference values from elsewhere: Meta's Interaction SDK ships its wrist-rotation one-euro
 > filter at `minCutoff 2.0 Hz, beta 3.0` — the 0.05 Hz we were using earlier is 40× heavier than
