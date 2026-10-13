@@ -423,3 +423,20 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
 - beta now stiffens the spring smoothly with speed (no threshold, nothing to toggle).
 - Verified numerically: full step response at 90 Hz and 163 Hz -> peak 1.000000,
   overshoot 0; peak velocity dt-independent (6.9456 vs 6.9447).
+
+## THE dt BUG (root cause of "floaty / no smoothing / nothing changes")
+
+- Log evidence: the game polls ovr_GetTrackingState ~180 Hz (120 calls / 0.667 s) but every
+  filter step was fed dt=0.0001 - the old clamp floor, not a real interval. The follower's
+  clock ran ~55x slower than real time, so EVERY profile collapsed into the same molasses.
+  The trigger gate and multipliers were applying all along (trig=1.00 x6/4 on=1 in the log),
+  they just could not be felt: jitter meter showed 3.3x vs 3.1x smoother, held vs not.
+- Why: the game calls in bursts from more than one thread, so the per-call QPC delta was
+  near zero for most calls; the shared g_lastQpc was also racy.
+- Fix: NowDt() now steps by the average inter-call time (deltas telescope, so the running
+  mean IS 1/call-rate), guarded by g_fcs against the thread race, clamped to 0.2-50 ms.
+  Verify in openvr_proxy.log: dt= must read ~0.005-0.006, never 0.0001.
+- Also corrected the settle-time claim: settle(95%) ~= 2.4 * smoothTime = 0.38 / cutoff
+  (a second-order follower arrives slower than a first-order at the same smoothTime; the
+  earlier table omitted that factor). Retuned: base 3.0 Hz (0.13 s), trigger/two-hand
+  1.0 Hz rot (0.38 s) via zoom_mult_rot=3.

@@ -296,12 +296,31 @@ static void PollTrigger() {
     }
 }
 
+// dt for the filters. The game calls this hook in BURSTS (several calls back-to-back, then a
+// gap) and from more than one thread, so the raw QPC delta of a single call is meaningless:
+// the 0.0001 dt in the log was the old clamp floor, not a real interval. That ran the
+// follower's clock far slower than real time, which collapsed every profile into the same
+// molasses - the trigger's x6/4 could not be felt at all (measured: 3.3x vs 3.1x smoother).
+//
+// Fix: step by the AVERAGE inter-call time. Consecutive deltas telescope, so their running
+// mean IS the true 1/call-rate - burst gaps, the clamp floor and the shared-state thread
+// race all disappear, and the follower advances ~1 s of simulated time per real second.
 static double NowDt() {
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
-    double dt = (double)(now.QuadPart - g_lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
+    EnterCriticalSection(&g_fcs);            // shared with the filter step, never nested
+    double raw = (double)(now.QuadPart - g_lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
     g_lastQpc = now;
-    if (dt < 1e-4) dt = 1e-4;
-    if (dt > 0.10) dt = 0.10;
+    static double ema = 0.006;
+    static bool   have = false;
+    if (!have || raw < 0.0 || raw > 1.0) {   // first call, or a stall (alt-tab) -> reseed
+        ema = 0.006; have = true;
+    } else {
+        ema += (raw - ema) * 0.05;           // slow average over ~20 calls
+        if (ema < 2e-4) ema = 2e-4;          // >= 5000 calls/s: clamp to something sane
+        if (ema > 0.05)  ema = 0.05;         // <= 20 calls/s
+    }
+    double dt = ema;
+    LeaveCriticalSection(&g_fcs);
     return dt;
 }
 static void ResetFilters() {

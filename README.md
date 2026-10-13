@@ -141,13 +141,13 @@ xychart-beta
     title "Response to one hand move, then hold still (monotonic, never passes 100%)"
     x-axis "seconds after the move" [0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2]
     y-axis "followed (%)" 0 --> 100
-    line [0, 0, 0, 0.2, 0.7, 2.7, 9.1, 26.6]
-    line [0, 0.6, 2.4, 8.2, 24.3, 56.2, 89, 99.5]
-    line [0, 8.2, 24.3, 56.2, 89, 99.5, 100, 100]
+    line [0, 0, 0.2, 0.7, 2.7, 9.1, 26.6, 59.7]
+    line [0, 2.4, 8.2, 24.3, 56.2, 89, 99.5, 100]
+    line [0, 24.3, 56.2, 89, 99.5, 100, 100, 100]
 ```
 
-Series: **0.05 Hz** (the old drift), **0.375 Hz** (trigger default), **1.5 Hz** (base default).
-Note the flat start on every curve — that is the velocity ramping from zero.
+Series: **0.05 Hz** (drift), **0.375 Hz**, **1.5 Hz**. Note the flat start on every curve — that
+is the velocity ramping from zero.
 
 **It cannot overshoot.** `zeta = 1` (critically damped) is the fastest response that does not
 overshoot, and Unity's closed-form `exp()` solution is used instead of raw integration so it stays
@@ -158,15 +158,30 @@ stable and frame-rate independent at any frame rate. Measured over a full step r
 
 ### Tuning
 
-`min_cutoff` still means the same thing; it just maps to seconds now: `smoothTime = 1/(2*pi*cutoff)`.
+`min_cutoff` still means the same thing, and maps to seconds: `smoothTime = 1/(2*pi*cutoff)`.
+What you actually feel is the **settle time**: `settle(95%) ≈ 2.4 × smoothTime ≈ 0.38 / cutoff`.
+(A second-order follower is slower to *arrive* than a first-order one at the same smoothTime —
+that factor is real, the earlier table omitted it.)
 
-| cutoff | smoothTime | feel |
-|---|---|---|
-| 0.05 Hz | 3.18 s | drifts away — the old float |
-| 0.4 Hz | 0.40 s | heavy, deliberate weight |
-| 0.67 Hz | 0.24 s | smooth but trackable ← trigger default |
-| 1.5 Hz | 0.11 s | light, always-on base smoothing |
-| 3.0 Hz | 0.05 s | close to raw |
+| cutoff | smoothTime | settle (95%) | feel |
+|---|---|---|---|
+| 0.05 Hz | 3.18 s | ~7.6 s | drifts away |
+| 0.4 Hz | 0.40 s | ~0.95 s | heavy |
+| 1.0 Hz | 0.16 s | **~0.38 s** | strong but trackable ← trigger / two-hand default |
+| 3.0 Hz | 0.05 s | ~0.13 s | light, always-on base smoothing |
+
+### The dt bug that made everything feel like molasses
+
+For most of this project the follower was stepped with `dt=0.0001` — not a real interval, the
+old clamp floor. The game calls `ovr_GetTrackingState` in bursts from more than one thread, so
+the raw per-call QPC delta was meaningless and almost every step got the 0.1 ms floor: the
+follower's clock ran ~55× slower than real time. **Every** profile collapsed into the same
+molasses, which is why no amount of tuning ever felt different and the trigger's multiplier was
+unmeasurable (3.3× vs 3.1× smoother with the trigger held vs not).
+
+`dt` now comes from the **average call rate** (consecutive deltas telescope, so their running
+mean *is* the true interval), guarded against the two-thread race. Verify in
+`openvr_proxy.log`: `dt=` must read ~0.005–0.006, never 0.0001.
 
 `beta` stiffens the spring smoothly as the gun picks up speed (no threshold, so nothing to
 toggle). Higher `beta` = catches up sooner on a fast sweep, at the cost of some of the weight.
