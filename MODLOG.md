@@ -405,3 +405,21 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
 - Retuned so nothing drifts: base rot 1.5 Hz (0.11 s), trigger 0.375 Hz (0.42 s) via
   zoom_mult_rot=4, two-hand rot 0.4 Hz (0.40 s). No more 0.05 Hz (3.2 s) drift.
 - predict_ms stays 0: extrapolation is the only thing that could overshoot.
+
+## Critically damped follower (S-curve) replacing the first-order low-pass
+
+- A first-order low-pass is not smooth: it hits MAXIMUM velocity in frame 1, i.e. an
+  instant 0 -> max velocity jump = infinite acceleration. That is the kick at the start
+  and the hard corner on arrival. Lag != smooth.
+- filters.h now implements a second-order critically damped spring (zeta = 1), which is
+  Unity SmoothDamp / Game Programming Gems 4:  acc = w^2*err - 2*w*v,  w = 2/smoothTime.
+- The follower carries its own velocity, which starts at ZERO, ramps up, peaks, then
+  decays into the target. That is the S-curve.
+- Rotation version does the same in the log map: r = log(conj(q)*n), apply q*exp(stepR),
+  with the body-frame angular velocity damped the same way.
+- Unity's closed-form exp() solution is used (not raw integration) so it is stable and
+  frame-rate independent. step() signatures, config keys and the ini are unchanged -
+  smoothTime = 1/(2*pi*cutoff), so every existing value keeps its meaning.
+- beta now stiffens the spring smoothly with speed (no threshold, nothing to toggle).
+- Verified numerically: full step response at 90 Hz and 163 Hz -> peak 1.000000,
+  overshoot 0; peak velocity dt-independent (6.9456 vs 6.9447).

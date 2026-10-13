@@ -122,39 +122,54 @@ two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall 
 
 ## How the smoothing works
 
-It is a **plain interpolator**, and that is deliberate. Every frame it moves the gun a fixed
-fraction of the way towards your hand:
+It is a **second-order critically damped follower** — the same primitive as Unity's `SmoothDamp`
+(Game Programming Gems 4):
 
 ```
-gun += (hand - gun) * a          a = 1 / (1 + tau/dt),   tau = 1 / (2*pi*cutoff)
+acc = w^2 * err - 2*w * v          w = 2 / smoothTime          zeta = 1
 ```
 
-That is exactly the graph you described: the gun always **lags behind**, **accelerates towards**
-the latest movement, and asymptotically settles onto it. Two properties matter:
+A plain low-pass is **not** smooth, and that was a real bug: it reaches its maximum speed in the
+very first frame. Velocity jumps 0 → max instantly, which is infinite acceleration — a kick at the
+start and a hard corner on arrival. That reads as "laggy", not "smooth".
 
-- **It can never pass your hand.** Every step is a weighted average of where the gun is and where
-  your hand is, so the output is always *between* the two. No ringing, no overshoot, no lurch.
-- **There is no prediction anywhere.** `predict_ms=0`, and it should stay `0` — extrapolation is
-  the only thing in a chain like this that *can* overshoot the target.
+Here the follower keeps its **own velocity**, which starts at **zero**, ramps up, peaks, then
+decays as it lands. That is the S-curve, and it is what "smooth" actually means.
 
-`min_cutoff` is the smoothing strength. `beta` raises the cutoff while you are moving, which is
-what lets it catch up faster during a fast sweep instead of trailing badly.
-
-### Turn `min_cutoff` into settle time
-
+```mermaid
+xychart-beta
+    title "Response to one hand move, then hold still (monotonic, never passes 100%)"
+    x-axis "seconds after the move" [0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2]
+    y-axis "followed (%)" 0 --> 100
+    line [0, 0, 0, 0.2, 0.7, 2.7, 9.1, 26.6]
+    line [0, 0.6, 2.4, 8.2, 24.3, 56.2, 89, 99.5]
+    line [0, 8.2, 24.3, 56.2, 89, 99.5, 100, 100]
 ```
-settle = 1 / (2*pi*cutoff)
-```
 
-| cutoff | settle | feel |
+Series: **0.05 Hz** (the old drift), **0.375 Hz** (trigger default), **1.5 Hz** (base default).
+Note the flat start on every curve — that is the velocity ramping from zero.
+
+**It cannot overshoot.** `zeta = 1` (critically damped) is the fastest response that does not
+overshoot, and Unity's closed-form `exp()` solution is used instead of raw integration so it stays
+stable and frame-rate independent at any frame rate. Measured over a full step response at both
+90 Hz and 163 Hz: peak = exactly 1.000000, overshoot = 0.
+
+`predict_ms` stays `0`. Extrapolation is the only thing in a chain like this that *could* overshoot.
+
+### Tuning
+
+`min_cutoff` still means the same thing; it just maps to seconds now: `smoothTime = 1/(2*pi*cutoff)`.
+
+| cutoff | smoothTime | feel |
 |---|---|---|
-| 0.05 Hz | 3.2 s | drifts away — the float |
+| 0.05 Hz | 3.18 s | drifts away — the old float |
 | 0.4 Hz | 0.40 s | heavy, deliberate weight |
 | 0.67 Hz | 0.24 s | smooth but trackable ← trigger default |
 | 1.5 Hz | 0.11 s | light, always-on base smoothing |
 | 3.0 Hz | 0.05 s | close to raw |
 
-Pick the lowest value you can still aim with. Lower buys steadiness and costs drift.
+`beta` stiffens the spring smoothly as the gun picks up speed (no threshold, so nothing to
+toggle). Higher `beta` = catches up sooner on a fast sweep, at the cost of some of the weight.
 
 ### Do not add a speed/error threshold
 
