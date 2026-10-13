@@ -33,6 +33,10 @@ struct OneEuroVec3 {
 
     void reset() { init = false; for (int i = 0; i < 3; i++) v[i] = 0.0; }
 
+    // catchup: stiffness per metre of lag. 0 = off (old behaviour). The further behind the follower is,
+    // the faster it closes the gap, so a big lag can never "float"; a tiny lag (tremor) stays heavily smoothed.
+    double catchup = 0.0;
+
     void step(const float* x, double dt, double minCut, double beta, double dCut,
               double predictSec, const float* vel, float* out) {
         (void)dCut;
@@ -42,8 +46,10 @@ struct OneEuroVec3 {
             init = true;
         } else if (st > 0.0) {
             double sp = sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
-            if (beta > 0.0) {                 // moving => stiffen. Smooth, no threshold, no toggle
-                double s = st / (1.0 + beta * sp);
+            double ex0 = (double)x[0] - y[0], ey0 = (double)x[1] - y[1], ez0 = (double)x[2] - y[2];
+            double lag = sqrt(ex0*ex0 + ey0*ey0 + ez0*ez0);               // metres still behind
+            if (beta > 0.0 || catchup > 0.0) {   // moving or lagging => stiffen. Smooth, no threshold, no toggle
+                double s = st / (1.0 + beta * sp + catchup * lag);
                 if (s < 0.01) s = 0.01;
                 st = s;
             }
@@ -69,6 +75,9 @@ struct OneEuroQuat {
     double av[3] = { 0, 0, 0 };   // body-frame angular velocity (rad/s) - the S-curve lives here
 
     void reset() { init = false; for (int i = 0; i < 3; i++) av[i] = 0.0; }
+
+    // catchup: stiffness per radian of lag (see OneEuroVec3). 0 = off (old behaviour).
+    double catchup = 0.0;
 
     void step(const float* in, double dt, double minCut, double beta, double dCut, float* out) {
         (void)dCut;
@@ -98,8 +107,9 @@ struct OneEuroQuat {
             else           { r[0] = r[1] = r[2] = 0.0; }
 
             double sp = sqrt(av[0]*av[0] + av[1]*av[1] + av[2]*av[2]);
-            if (beta > 0.0) {                 // turning => stiffen. Smooth, no threshold, no toggle
-                double t = st / (1.0 + beta * sp);
+            if (beta > 0.0 || catchup > 0.0) {   // turning or lagging => stiffen. Smooth, no threshold, no toggle
+                double lag = sqrt(r[0]*r[0] + r[1]*r[1] + r[2]*r[2]);     // radians still behind
+                double t = st / (1.0 + beta * sp + catchup * lag);
                 if (t < 0.01) t = 0.01;
                 st = t;
             }

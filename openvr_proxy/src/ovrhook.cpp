@@ -62,6 +62,9 @@ struct Cfg {
     // separate filter profile used ONLY while two-hand mode is active.
     // 0 == "use the normal zoom profile instead"
     double thMinCutoff, thBeta, thMinCutoffRot, thBetaRot;
+    // catch-up: extra stiffness per metre / per radian of lag, used only by the HEAVY profiles
+    // (trigger held or two-hand active). 0 = off = old behaviour.
+    double catchPos, catchRot;
 };
 static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
                       1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
@@ -136,6 +139,10 @@ static void LoadCfg() {
     g_cfg.thBeta         = CfgD("twohand_beta", 8.0);
     g_cfg.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 1.0);
     g_cfg.thBetaRot      = CfgD("twohand_beta_rot", 6.0);
+    g_cfg.catchPos       = CfgD("catchup_pos", 0.0);
+    g_cfg.catchRot       = CfgD("catchup_rot", 0.0);
+    if (g_cfg.catchPos < 0.0) g_cfg.catchPos = 0.0;
+    if (g_cfg.catchRot < 0.0) g_cfg.catchRot = 0.0;
 }
 
 // ---------- smoothing state ----------
@@ -176,6 +183,7 @@ typedef int (*PFN_GetInputState)(void* session, unsigned int controllerType, voi
 static PFN_GetInputState g_getInputState = nullptr;
 static void*             g_session = nullptr;
 static volatile LONG     g_trigger1000 = 0;      // gun-hand INDEX trigger x1000
+static volatile LONG     g_pollRcGun = -999;     // last return code of ovr_GetInputState for the gun hand (-999 = never ran)
 static volatile LONG     g_grip1000 = 0;         // button-hand GRIP button x1000
 static volatile LONG     g_btnTrig1000 = 0;      // button-hand INDEX trigger x1000
 static bool              g_dumpedInput = false;
@@ -262,7 +270,14 @@ static void SlerpQ(const float* a, const float* b, float t, float* out) {
 }
 
 static void PollTrigger() {
-    if (!g_getInputState || !g_session) return;
+    if (!g_getInputState || !g_session) {
+        // diagnostic: say so (rarely) instead of silently never smoothing on the trigger
+        static int s_idle = 0;
+        if ((s_idle++ % 400) == 0)
+            Bl2Log("PollTrigger idle: ovr_GetInputState=%p session=%p  (trigger gate cannot work until both are set)",
+                   (void*)g_getInputState, g_session);
+        return;
+    }
     static const unsigned int kType[2] = { 0x01u /*LTouch*/, 0x02u /*RTouch*/ };
     static ovrInputStateBuf buf;
     const int gun = g_cfg.gunHand;
@@ -271,7 +286,9 @@ static void PollTrigger() {
 
     // 1) the GUN hand's index trigger -> the zoom / smoothing gate
     memset(&buf, 0, sizeof(buf));
-    if (g_getInputState(g_session, kType[gun], &buf) == 0) {
+    const int rcGun = g_getInputState(g_session, kType[gun], &buf);
+    g_pollRcGun = rcGun;
+    if (rcGun == 0) {
         int it = (int)(buf.f.IndexTrigger[gun] * 1000.0f);
         if (it < 0) it = 0; if (it > 1000) it = 1000;
         g_trigger1000 = it;
@@ -296,31 +313,12 @@ static void PollTrigger() {
     }
 }
 
-// dt for the filters. The game calls this hook in BURSTS (several calls back-to-back, then a
-// gap) and from more than one thread, so the raw QPC delta of a single call is meaningless:
-// the 0.0001 dt in the log was the old clamp floor, not a real interval. That ran the
-// follower's clock far slower than real time, which collapsed every profile into the same
-// molasses - the trigger's x6/4 could not be felt at all (measured: 3.3x vs 3.1x smoother).
-//
-// Fix: step by the AVERAGE inter-call time. Consecutive deltas telescope, so their running
-// mean IS the true 1/call-rate - burst gaps, the clamp floor and the shared-state thread
-// race all disappear, and the follower advances ~1 s of simulated time per real second.
 static double NowDt() {
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
-    EnterCriticalSection(&g_fcs);            // shared with the filter step, never nested
-    double raw = (double)(now.QuadPart - g_lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
+    double dt = (double)(now.QuadPart - g_lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
     g_lastQpc = now;
-    static double ema = 0.006;
-    static bool   have = false;
-    if (!have || raw < 0.0 || raw > 1.0) {   // first call, or a stall (alt-tab) -> reseed
-        ema = 0.006; have = true;
-    } else {
-        ema += (raw - ema) * 0.05;           // slow average over ~20 calls
-        if (ema < 2e-4) ema = 2e-4;          // >= 5000 calls/s: clamp to something sane
-        if (ema > 0.05)  ema = 0.05;         // <= 20 calls/s
-    }
-    double dt = ema;
-    LeaveCriticalSection(&g_fcs);
+    if (dt < 1e-4) dt = 1e-4;
+    if (dt > 0.10) dt = 0.10;
     return dt;
 }
 static void ResetFilters() {
@@ -432,6 +430,16 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // because a tiny angle becomes a big miss at distance.
     const double multRot = (g_cfg.triggerGate != 0 && gateHeld)
                            ? (g_cfg.zoomMultRot > 0 ? g_cfg.zoomMultRot : g_cfg.zoomMult) : 1.0;
+    {   // diagnostic: one line each time the trigger gate flips, with the poll result code
+        static int s_prevGate = -1;
+        const int gnow = gateHeld ? 1 : 0;
+        if (g_cfg.log && gnow != s_prevGate) {
+            s_prevGate = gnow;
+            Bl2Log("trigger gate -> %s  trig=%.3f (threshold %.2f)  poll_rc=%ld  gun_hand=%s  trigger_gate=%d  zoom x%.1f/%.1f",
+                   gnow ? "HELD" : "released", trig, g_cfg.triggerThreshold, (long)g_pollRcGun,
+                   g_cfg.gunHand == 0 ? "left" : "right", g_cfg.triggerGate, mult, multRot);
+        }
+    }
     // ---- two-handed grip: only while its button is held, and only if both hands are tracked
     //      and the off-hand is within a plausible distance of the gun hand ----
     g_twoHandActive = 0;
@@ -457,9 +465,16 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         btr = g_cfg.betaRot / multRot;
     }
 
+    // catch-up only for the heavy profiles, so the light base profile keeps its current feel
+    const bool heavy = gateHeld || (g_twoHandActive != 0);
+    const double cPos = heavy ? g_cfg.catchPos : 0.0;
+    const double cRot = heavy ? g_cfg.catchRot : 0.0;
+
     EnterCriticalSection(&g_fcs);
     if (doSmooth) {
         for (int h = 0; h < 2; h++) {
+            g_fpos[h].catchup = cPos;
+            g_frot[h].catchup = cRot;
             ovrPoseStatef* ps = &st->HandPoses[h];
             if (!(st->HandStatusFlags[h] & STATUS_POSITION_TRACKED)) {
                 g_fpos[h].reset(); g_frot[h].reset();
