@@ -2,14 +2,16 @@
 
 A DLL-proxy mod for **Borderlands 2 VR** (Steam AppID 991260, version 1.0.462.2101248).
 
-Two features, both driven by your **right index trigger** (the zoom/aim bind):
+Two features, driven by your controller buttons (both changeable in the ini):
 
-1. **Two-handed grip** — while the trigger is held, the gun aims along the **line between your
-   two hands**. Your hands stay completely free to slide back and forth along the grip; only the
-   *aim direction* is locked to the line. Move the off-hand and the gun rotates with it.
+1. **Two-handed grip** — while you hold the **grip button** (default) the gun aims along the
+   **line between your two hands**. Your hands stay completely free to slide back and forth along
+   the grip; only the *aim direction* is locked to the line. Move the off-hand and the gun rotates
+   with it. The button always belongs to the **hand holding the gun**, so normal and lefty layouts
+   both work.
 2. **Rotation smoothing** — your hand poses are run through a One Euro filter, so the small
-   tremble that ruins long-range shots is removed. It gets much heavier while zoomed (that is
-   the setting that matters for snipers).
+   tremble that ruins long-range shots is removed. It gets much heavier while the **index trigger**
+   (the zoom bind) is held — that is the setting that matters for snipers.
 
 Works in **normal and lefty layouts** (see `gun_hand`).
 
@@ -92,12 +94,45 @@ applies within a moment — no restart needed.
 | Key | Default | Meaning |
 |---|---|---|
 | `twohand` | 1 | enable the feature |
-| `twohand_gate` | 1 | 1 = only while the trigger is held (recommended), 0 = always on |
+| `twohand_gate` | 1 | 1 = only while the button below is held (recommended), 0 = always on |
+| `twohand_button` | grip | which button engages two-hand mode: `grip` (recommended — the index trigger is also the game's pickup button) or `trigger` |
+| `twohand_hand` | offhand | which **controller** owns that button: `offhand` (the hand *not* holding the gun — recommended, because on the gun hand the grip is the game's **reload** bind) or `gun`. Follows `gun_hand` automatically. |
 | `gun_hand` | right | **which hand holds the gun**: `right` normal, `left` for lefty mode |
 | `aim_axis` | -z | which local axis of that hand points down the barrel: `+x -x +y -y +z -z` |
 | `twohand_min_dist` | 0.12 | don't engage if the hands are closer than this (metres) |
 | `twohand_max_dist` | 0.75 | …or further apart than this |
 | `twohand_blend` | 1.0 | 0..1, how hard to snap to the line (1 = fully locked) |
+
+#### Two-hand-only filter profile
+While two-hand mode is active it uses its **own** filter settings, because two hands on the gun
+means much less input noise. The idea is *very steady at rest, still fast enough to track*:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `twohand_min_cutoff` | 0.25 | low = very heavy / smooth |
+| `twohand_beta` | 0.10 | low = pure slide (no opening up) |
+| `twohand_min_cutoff_rot` | 0.05 | rotation equivalent |
+| `twohand_beta_rot` | 0.02 | rotation equivalent |
+
+**These two blocks never combine.** While two-hand mode is active, the two-hand block *replaces*
+the trigger/zoom block entirely — so a pistol one-handed (trigger only) keeps its own tuning, and
+two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall back to block 1.
+
+**The trade-off you are choosing with `min_cutoff`:** settle time `≈ 1/(2π·cutoff)`.
+
+| cutoff | settle time |
+|---|---|
+| 0.05 Hz | 3.2 s — maximum smoothness, but the gun drifts for a while after you stop |
+| 0.5 Hz | 0.32 s |
+| 1.0 Hz | 0.16 s |
+| 3.0 Hz | 0.05 s |
+
+Lower = smoother *and* more drift. That is physics, not a bug: use the lowest value you can aim
+with. Raising `beta` lets the filter open up while moving but does nothing while you are still.
+
+Set `twohand_min_cutoff_rot=0` to fall back to the normal zoom profile.
+**Tuning rule of thumb:** smoother at rest → lower the `min_cutoff`s. Better tracking while
+rotating → raise the `beta`s. They are independent, which is the whole point of this filter.
 
 ---
 

@@ -57,11 +57,17 @@ struct Cfg {
     int    triggerGate;          // 0 = ignore trigger, 1 = stronger while held, 2 = only while held
     double triggerThreshold, zoomMult, zoomMultRot;
     // ---- two-handed grip ----
-    int    twohand, twohandGate, gunHand, axisIndex;
+    int    twohand, twohandGate, gunHand, axisIndex, twohandButton, twohandHand;
     double twohandMinDist, twohandMaxDist, twohandBlend;
+    // separate filter profile used ONLY while two-hand mode is active.
+    // 0 == "use the normal zoom profile instead"
+    double thMinCutoff, thBeta, thMinCutoffRot, thBetaRot;
 };
 static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
-                      1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0.12, 0.75, 1.0 };
+                      1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
+                      0 /*twohandHand: 0=offhand,1=gun hand*/,
+                      0.12, 0.75, 1.0,
+                      1.5, 8.0, 1.0, 6.0 };
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
@@ -100,6 +106,11 @@ static void LoadCfg() {
     g_cfg.twohand     = GetPrivateProfileIntA("bl2vr_grip", "twohand", 1, g_ini);
     g_cfg.twohandGate = GetPrivateProfileIntA("bl2vr_grip", "twohand_gate", 1, g_ini);
     {
+        char tb[32] = { 0 };
+        GetPrivateProfileStringA("bl2vr_grip", "twohand_button", "grip", tb, sizeof(tb), g_ini);
+        g_cfg.twohandButton = (tb[0] == 't' || tb[0] == 'T') ? 1 : 0;   // 0 = grip, 1 = trigger
+    }
+    {
         char gh[32] = { 0 };
         GetPrivateProfileStringA("bl2vr_grip", "gun_hand", "right", gh, sizeof(gh), g_ini);
         g_cfg.gunHand = (gh[0] == 'l' || gh[0] == 'L') ? 0 : 1;      // 0 = left, 1 = right
@@ -111,11 +122,20 @@ static void LoadCfg() {
         for (int i = 0; i < 6; i++) if (_stricmp(ax, kAxisNames[i]) == 0) { idx = i; break; }
         g_cfg.axisIndex = idx;
     }
-    g_cfg.twohandMinDist = CfgD("twohand_min_dist", 0.12);
+    {
+        char hh[32] = { 0 };
+        GetPrivateProfileStringA("bl2vr_grip", "twohand_hand", "offhand", hh, sizeof(hh), g_ini);
+        g_cfg.twohandHand = (hh[0] == 'g' || hh[0] == 'G') ? 1 : 0;   // 0 = offhand, 1 = gun hand
+    }
     g_cfg.twohandMaxDist = CfgD("twohand_max_dist", 0.75);
     g_cfg.twohandBlend   = CfgD("twohand_blend", 1.0);
     if (g_cfg.twohandBlend < 0.0) g_cfg.twohandBlend = 0.0;
     if (g_cfg.twohandBlend > 1.0) g_cfg.twohandBlend = 1.0;
+    // two-hand-only filter profile (0 = fall back to the zoom profile)
+    g_cfg.thMinCutoff    = CfgD("twohand_min_cutoff", 1.5);
+    g_cfg.thBeta         = CfgD("twohand_beta", 8.0);
+    g_cfg.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 1.0);
+    g_cfg.thBetaRot      = CfgD("twohand_beta_rot", 6.0);
 }
 
 // ---------- smoothing state ----------
@@ -134,12 +154,14 @@ static bool          g_dumped = false;
 //   IndexTrigger is indexed by ovrHand_Left(0)/ovrHand_Right(1), so the RIGHT trigger
 //   is IndexTrigger[1] at byte 20. (ovrControllerType_RTouch = 0x02 for the query.)
 struct ovrInputStateLite {
-    double       TimeInSeconds;
-    unsigned int Buttons;
-    unsigned int Touches;
-    float        IndexTrigger[2];
+    double       TimeInSeconds;      // 0
+    unsigned int Buttons;            // 8
+    unsigned int Touches;            // 12
+    float        IndexTrigger[2];    // 16   (index trigger, indexed by hand)
+    float        HandTrigger[2];     // 24   (grip button,  indexed by hand)
 };
 static_assert(offsetof(ovrInputStateLite, IndexTrigger) == 16, "IndexTrigger offset");
+static_assert(offsetof(ovrInputStateLite, HandTrigger) == 24,  "HandTrigger offset");
 
 // The runtime writes its FULL ovrInputState (120+ bytes, version dependent) through the
 // pointer we hand it - so the buffer must be generously oversized. Passing a 24-byte
@@ -153,7 +175,9 @@ static_assert(offsetof(ovrInputStateBuf, f) == 0, "head must be at offset 0");
 typedef int (*PFN_GetInputState)(void* session, unsigned int controllerType, void* inputState);
 static PFN_GetInputState g_getInputState = nullptr;
 static void*             g_session = nullptr;
-static volatile LONG     g_trigger1000 = 0;      // right index trigger x1000
+static volatile LONG     g_trigger1000 = 0;      // gun-hand INDEX trigger x1000
+static volatile LONG     g_grip1000 = 0;         // button-hand GRIP button x1000
+static volatile LONG     g_btnTrig1000 = 0;      // button-hand INDEX trigger x1000
 static bool              g_dumpedInput = false;
 
 // ---- jitter meter ----
@@ -239,18 +263,35 @@ static void SlerpQ(const float* a, const float* b, float t, float* out) {
 
 static void PollTrigger() {
     if (!g_getInputState || !g_session) return;
-    static ovrInputStateBuf buf;      // static: oversized, off the stack
+    static const unsigned int kType[2] = { 0x01u /*LTouch*/, 0x02u /*RTouch*/ };
+    static ovrInputStateBuf buf;
+    const int gun = g_cfg.gunHand;
+    // which hand owns the two-hand button: 0 = OFFHAND (default), 1 = the gun hand
+    const int btn = (g_cfg.twohandHand == 0) ? (1 - gun) : gun;
+
+    // 1) the GUN hand's index trigger -> the zoom / smoothing gate
     memset(&buf, 0, sizeof(buf));
-    if (g_getInputState(g_session, 0x02 /* ovrControllerType_RTouch */, &buf) == 0) {
-        int v = (int)(buf.f.IndexTrigger[1] * 1000.0f);
-        if (v < 0) v = 0;
-        if (v > 1000) v = 1000;
-        g_trigger1000 = v;
+    if (g_getInputState(g_session, kType[gun], &buf) == 0) {
+        int it = (int)(buf.f.IndexTrigger[gun] * 1000.0f);
+        if (it < 0) it = 0; if (it > 1000) it = 1000;
+        g_trigger1000 = it;
+    }
+
+    // 2) grip + index trigger of the BUTTON hand -> the two-hand gate.
+    //    Default is the OFFHAND: on the gun hand the grip is the game's reload bind.
+    memset(&buf, 0, sizeof(buf));
+    if (g_getInputState(g_session, kType[btn], &buf) == 0) {
+        int ht = (int)(buf.f.HandTrigger[btn]  * 1000.0f);
+        int it = (int)(buf.f.IndexTrigger[btn] * 1000.0f);
+        if (ht < 0) ht = 0; if (ht > 1000) ht = 1000;
+        if (it < 0) it = 0; if (it > 1000) it = 1000;
+        g_grip1000    = ht;
+        g_btnTrig1000 = it;
         if (!g_dumpedInput) {
             g_dumpedInput = true;
-            Bl2Log("--- input state dump: Time=%.2f Buttons=0x%X Touches=0x%X trigL=%.3f trigR=%.3f ---",
-                   buf.f.TimeInSeconds, buf.f.Buttons, buf.f.Touches,
-                   buf.f.IndexTrigger[0], buf.f.IndexTrigger[1]);
+            Bl2Log("--- input dump: gunHand=%s buttonHand=%s | idxTrig=%.3f grip=%.3f Buttons=0x%X Touches=0x%X ---",
+                   gun == 0 ? "left" : "right", btn == 0 ? "left" : "right",
+                   buf.f.IndexTrigger[btn], buf.f.HandTrigger[btn], buf.f.Buttons, buf.f.Touches);
         }
     }
 }
@@ -356,7 +397,15 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     if (!g_session && session) g_session = session;   // the polling thread does the rest
 
     const double trig     = (double)g_trigger1000 / 1000.0;
-    const bool   gateHeld = (g_cfg.triggerGate != 0) && (trig >= g_cfg.triggerThreshold);
+    const double grip     = (double)g_grip1000 / 1000.0;
+    const bool   trigHeld = (trig >= g_cfg.triggerThreshold);
+    const bool   gripHeld = (grip >= g_cfg.triggerThreshold);
+    const bool   gateHeld = (g_cfg.triggerGate != 0) && trigHeld;
+    // two-hand mode's button lives on the OFFHAND by default (on the gun hand the grip is the
+    // game's reload bind). Smoothing/zoom always follows the GUN hand's index trigger.
+    const double btnTrig  = (double)g_btnTrig1000 / 1000.0;
+    const bool   twoHandHeld = g_cfg.twohandButton ? (btnTrig >= g_cfg.triggerThreshold)
+                                                   : gripHeld;
     const bool   doSmooth = g_cfg.enabled && g_cfg.smoothHands &&
                             (g_cfg.triggerGate != 2 || gateHeld);
     const double mult    = (g_cfg.triggerGate != 0 && gateHeld) ? g_cfg.zoomMult : 1.0;
@@ -364,18 +413,29 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // because a tiny angle becomes a big miss at distance.
     const double multRot = (g_cfg.triggerGate != 0 && gateHeld)
                            ? (g_cfg.zoomMultRot > 0 ? g_cfg.zoomMultRot : g_cfg.zoomMult) : 1.0;
-    // Both cutoff AND beta are divided by the multiplier, so zooming simply makes the filter
-    // N times heavier in every respect - that is the additive "slide" feel that was liked at 20x.
-    // (No beta boost: boosting it made the filter wake up early, i.e. MORE responsive - the
-    // opposite of what was wanted.)
-    const double mc  = g_cfg.minCutoff    / mult,    bt  = g_cfg.beta    / mult;
-    const double mcr = g_cfg.minCutoffRot / multRot, btr = g_cfg.betaRot / multRot;
-
-    // ---- two-handed grip: only while the gate is held, and only if both hands are tracked
+    // ---- two-handed grip: only while its button is held, and only if both hands are tracked
     //      and the off-hand is within a plausible distance of the gun hand ----
     g_twoHandActive = 0;
-    if (g_cfg.twohand && (g_cfg.twohandGate == 0 || gateHeld)) {
+    if (g_cfg.twohand && (g_cfg.twohandGate == 0 || twoHandHeld)) {
         if (ApplyTwoHand(st)) g_twoHandActive = 1;
+    }
+
+    // ---- pick the filter profile ----
+    // Two hands on the gun = far less input noise, so two-hand mode gets its own setup:
+    // a LOW cutoff (very steady while the shot is being lined up) plus a HIGH beta (wakes up
+    // immediately when the gun is deliberately rotated, so targets can still be tracked).
+    // Everything else keeps the zoom profile: cutoff AND beta both divided = uniform "slide".
+    double mc, bt, mcr, btr;
+    if (g_twoHandActive && g_cfg.thMinCutoffRot > 0.0) {
+        mc  = g_cfg.thMinCutoff;
+        bt  = g_cfg.thBeta;
+        mcr = g_cfg.thMinCutoffRot;
+        btr = g_cfg.thBetaRot;
+    } else {
+        mc  = g_cfg.minCutoff    / mult;
+        bt  = g_cfg.beta    / mult;
+        mcr = g_cfg.minCutoffRot / multRot;
+        btr = g_cfg.betaRot / multRot;
     }
 
     EnterCriticalSection(&g_fcs);
@@ -428,9 +488,9 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         }
     }
     if (g_cfg.log && (c <= g_cfg.logFrames || (c % 120) == 0)) {
-        Bl2Log("#%ld dt=%.4f flags=%u hf=%u/%u trig=%.2f x%.0f/%.0f on=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
+        Bl2Log("#%ld dt=%.4f flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
             c, dt, st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
-            trig, mult, multRot, (int)doSmooth,
+            trig, grip, mult, multRot, (int)doSmooth, g_twoHandActive,
             st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z,
             st->HandPoses[0].ThePose.Position.x, st->HandPoses[0].ThePose.Position.y, st->HandPoses[0].ThePose.Position.z,
             st->HandPoses[1].ThePose.Position.x, st->HandPoses[1].ThePose.Position.y, st->HandPoses[1].ThePose.Position.z,
