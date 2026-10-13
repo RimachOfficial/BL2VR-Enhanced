@@ -214,7 +214,28 @@ Rimach's new goal: not two-hand grip first, but **stop the hands feeling jittery
   "Set SteamVR as OpenXR runtime", but that is irrelevant here: BL2VR doesn't use OpenXR, and
   BL2VR + SteamVR crashes on this PC anyway.)
 
-### Session 1r — 20x/60x verified by measurement; two of my own bugs fixed
+### Session 1s — TWO-HANDED GRIP implemented + README
+Rimach's spec: hold the zoom trigger -> the gun aims along the **1:1 line between the hands**;
+hands stay free to slide along the grip; the off-hand drives the gun's rotation; must work in
+**normal and lefty** layouts (his is lefty -> gun in LEFT hand, off-hand = right).
+
+Implementation (`ovrhook.cpp`):
+- maths added: `QuatMul`, `QuatRotateVec`, `QuatFromTo`, `SlerpQ`, `QuatNormalizeF`.
+- `ApplyTwoHand()`: `forward = normalize(offhand_pos - gunhand_pos)`; the gun hand's orientation
+  gets a **delta** rotation (`qNew = delta * qGun`) so its barrel axis lands on that line.
+  **Positions are never touched** — that is what keeps the hands free to slide (as requested).
+- Gated by the same trigger as zoom; requires both hands tracked and the hand-to-hand distance
+  inside `twohand_min_dist`..`twohand_max_dist`.
+- `twohand_blend` (0..1) slerps between untouched and fully-locked for a softer snap.
+- Runs **before** the One Euro filter, so two-hand aim is also smoothed.
+- New config: `twohand`, `twohand_gate`, `gun_hand` (left|right), `aim_axis` (+x..-z),
+  `twohand_min_dist`, `twohand_max_dist`, `twohand_blend`.
+- **Axis calibration helper**: every ~1 s while active the log prints which hand-local axis best
+  matches the hand-to-hand line, so `aim_axis` can be set from data instead of guessing.
+  (Hold the gun on a target while reading it.)
+- Built + installed (220,160 B); his ini set to `gun_hand=left`.
+- **README.md written** — what the mod does, how it works, install/uninstall, full config
+  reference, the axis-calibration procedure, and the known limitations.
 Rimach: "3x the rotation only, in an additive way" (my previous build had boosted `beta`, which
 made it MORE responsive — wrong direction; reverted so cutoff AND beta are both divided).
 Final: `zoom_mult=20` (position), `zoom_mult_rot=60` (rotation, 3x the 20 he liked).

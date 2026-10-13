@@ -56,8 +56,18 @@ struct Cfg {
     double minCutoff, beta, derivCutoff, minCutoffRot, betaRot, predictMs;
     int    triggerGate;          // 0 = ignore trigger, 1 = stronger while held, 2 = only while held
     double triggerThreshold, zoomMult, zoomMultRot;
+    // ---- two-handed grip ----
+    int    twohand, twohandGate, gunHand, axisIndex;
+    double twohandMinDist, twohandMaxDist, twohandBlend;
 };
-static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0 };
+static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
+                      1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0.12, 0.75, 1.0 };
+
+// the six candidate barrel axes of the gun hand, in hand-local space
+static const float kAxes[6][3] = {
+    { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 }
+};
+static const char* kAxisNames[6] = { "+x", "-x", "+y", "-y", "+z", "-z" };
 static char g_ini[MAX_PATH] = { 0 };
 
 static double CfgD(const char* key, double def) {
@@ -85,6 +95,27 @@ static void LoadCfg() {
     g_cfg.zoomMultRot      = CfgD("zoom_mult_rot", 0.0);   // 0 = same as zoom_mult
     if (g_cfg.zoomMult < 1.0) g_cfg.zoomMult = 1.0;
     if (g_cfg.zoomMultRot < 0.0) g_cfg.zoomMultRot = 0.0;
+
+    // ---- two-handed grip ----
+    g_cfg.twohand     = GetPrivateProfileIntA("bl2vr_grip", "twohand", 1, g_ini);
+    g_cfg.twohandGate = GetPrivateProfileIntA("bl2vr_grip", "twohand_gate", 1, g_ini);
+    {
+        char gh[32] = { 0 };
+        GetPrivateProfileStringA("bl2vr_grip", "gun_hand", "right", gh, sizeof(gh), g_ini);
+        g_cfg.gunHand = (gh[0] == 'l' || gh[0] == 'L') ? 0 : 1;      // 0 = left, 1 = right
+    }
+    {
+        char ax[16] = { 0 };
+        GetPrivateProfileStringA("bl2vr_grip", "aim_axis", "-z", ax, sizeof(ax), g_ini);
+        int idx = 5;
+        for (int i = 0; i < 6; i++) if (_stricmp(ax, kAxisNames[i]) == 0) { idx = i; break; }
+        g_cfg.axisIndex = idx;
+    }
+    g_cfg.twohandMinDist = CfgD("twohand_min_dist", 0.12);
+    g_cfg.twohandMaxDist = CfgD("twohand_max_dist", 0.75);
+    g_cfg.twohandBlend   = CfgD("twohand_blend", 1.0);
+    if (g_cfg.twohandBlend < 0.0) g_cfg.twohandBlend = 0.0;
+    if (g_cfg.twohandBlend > 1.0) g_cfg.twohandBlend = 1.0;
 }
 
 // ---------- smoothing state ----------
@@ -152,6 +183,60 @@ static double QuatAngleDeg(const float* a, const float* b) {
     return 2.0 * atan2(v, (rw < 0 ? -rw : rw)) * 180.0 / 3.14159265358979323846;
 }
 
+// ---------------- two-handed grip maths ----------------
+static void QuatMul(const float* a, const float* b, float* out) {
+    double ax=a[0],ay=a[1],az=a[2],aw=a[3], bx=b[0],by=b[1],bz=b[2],bw=b[3];
+    out[0]=(float)(aw*bx + ax*bw + ay*bz - az*by);
+    out[1]=(float)(aw*by - ax*bz + ay*bw + az*bx);
+    out[2]=(float)(aw*bz + ax*by - ay*bx + az*bw);
+    out[3]=(float)(aw*bw - ax*bx - ay*by - az*bz);
+}
+static void QuatNormalizeF(float* q) {
+    double l = sqrt((double)q[0]*q[0] + (double)q[1]*q[1] + (double)q[2]*q[2] + (double)q[3]*q[3]);
+    if (l > 1e-12) { q[0]/=(float)l; q[1]/=(float)l; q[2]/=(float)l; q[3]/=(float)l; }
+}
+// rotate a local-space vector into world space
+static void QuatRotateVec(const float* q, const float* v, float* out) {
+    double tx = 2.0*(q[1]*v[2] - q[2]*v[1]);
+    double ty = 2.0*(q[2]*v[0] - q[0]*v[2]);
+    double tz = 2.0*(q[0]*v[1] - q[1]*v[0]);
+    out[0] = (float)(v[0] + q[3]*tx + (q[1]*tz - q[2]*ty));
+    out[1] = (float)(v[1] + q[3]*ty + (q[2]*tx - q[0]*tz));
+    out[2] = (float)(v[2] + q[3]*tz + (q[0]*ty - q[1]*tx));
+}
+// minimal rotation taking unit vector a to unit vector b
+static void QuatFromTo(const float* a, const float* b, float* out) {
+    double d = (double)a[0]*b[0] + (double)a[1]*b[1] + (double)a[2]*b[2];
+    if (d > 0.999999) { out[0]=0; out[1]=0; out[2]=0; out[3]=1; return; }
+    if (d < -0.999999) {                       // 180 deg - any perpendicular axis
+        float ax[3] = { 1, 0, 0 };
+        if (fabs(a[0]) > 0.9) { ax[0]=0; ax[1]=1; ax[2]=0; }
+        double cx = a[1]*ax[2]-a[2]*ax[1], cy = a[2]*ax[0]-a[0]*ax[2], cz = a[0]*ax[1]-a[1]*ax[0];
+        double l = sqrt(cx*cx+cy*cy+cz*cz);
+        out[0]=(float)(cx/l); out[1]=(float)(cy/l); out[2]=(float)(cz/l); out[3]=0; return;
+    }
+    double cx = (double)a[1]*b[2] - (double)a[2]*b[1];
+    double cy = (double)a[2]*b[0] - (double)a[0]*b[2];
+    double cz = (double)a[0]*b[1] - (double)a[1]*b[0];
+    out[0]=(float)cx; out[1]=(float)cy; out[2]=(float)cz; out[3]=(float)(1.0+d);
+    QuatNormalizeF(out);
+}
+static void SlerpQ(const float* a, const float* b, float t, float* out) {
+    double d = (double)a[0]*b[0]+(double)a[1]*b[1]+(double)a[2]*b[2]+(double)a[3]*b[3];
+    double bx=b[0], by=b[1], bz=b[2], bw=b[3];
+    if (d < 0) { d = -d; bx=-bx; by=-by; bz=-bz; bw=-bw; }
+    if (d > 0.9995) {
+        out[0]=(float)(a[0]+t*(bx-a[0])); out[1]=(float)(a[1]+t*(by-a[1]));
+        out[2]=(float)(a[2]+t*(bz-a[2])); out[3]=(float)(a[3]+t*(bw-a[3]));
+    } else {
+        double th = acos(d), s = sin(th);
+        double w1 = sin((1.0-t)*th)/s, w2 = sin(t*th)/s;
+        out[0]=(float)(w1*a[0]+w2*bx); out[1]=(float)(w1*a[1]+w2*by);
+        out[2]=(float)(w1*a[2]+w2*bz); out[3]=(float)(w1*a[3]+w2*bw);
+    }
+    QuatNormalizeF(out);
+}
+
 static void PollTrigger() {
     if (!g_getInputState || !g_session) return;
     static ovrInputStateBuf buf;      // static: oversized, off the stack
@@ -181,6 +266,65 @@ static double NowDt() {
 static void ResetFilters() {
     for (int h = 0; h < 2; h++) { g_fpos[h].reset(); g_frot[h].reset(); }
     g_fhead.reset();
+}
+
+// ---------------- two-handed grip solve ----------------
+// forward = normalize(offhand_pos - gunhand_pos). The gun hand's orientation gets a *delta*
+// rotation so its barrel axis lands on that line. Positions are NEVER touched, so the hands
+// stay free to slide back and forth along the grip - only the aim direction is locked.
+static int    g_twoHandActive = 0;
+static int    g_bestAxis = -1;
+static double g_bestAxisDot = -2.0;
+
+static bool ApplyTwoHand(ovrTrackingState* st) {
+    const int gun = g_cfg.gunHand, off = 1 - gun;
+
+    if (!(st->HandStatusFlags[gun] & STATUS_POSITION_TRACKED)) return false;
+    if (!(st->HandStatusFlags[off] & STATUS_POSITION_TRACKED)) return false;
+
+    ovrPoseStatef* pg = &st->HandPoses[gun];
+    ovrPoseStatef* po = &st->HandPoses[off];
+
+    float d[3] = { po->ThePose.Position.x - pg->ThePose.Position.x,
+                   po->ThePose.Position.y - pg->ThePose.Position.y,
+                   po->ThePose.Position.z - pg->ThePose.Position.z };
+    double len = sqrt((double)d[0]*d[0] + (double)d[1]*d[1] + (double)d[2]*d[2]);
+    if (len < g_cfg.twohandMinDist || len > g_cfg.twohandMaxDist) return false;
+
+    float fDes[3] = { (float)(d[0]/len), (float)(d[1]/len), (float)(d[2]/len) };
+    float qg[4] = { pg->ThePose.Orientation.x, pg->ThePose.Orientation.y,
+                    pg->ThePose.Orientation.z, pg->ThePose.Orientation.w };
+
+    float fCur[3];
+    QuatRotateVec(qg, kAxes[g_cfg.axisIndex], fCur);
+    double fl = sqrt((double)fCur[0]*fCur[0] + (double)fCur[1]*fCur[1] + (double)fCur[2]*fCur[2]);
+    if (fl < 1e-6) return false;
+    fCur[0] /= (float)fl; fCur[1] /= (float)fl; fCur[2] /= (float)fl;
+
+    float qd[4], qNew[4];
+    QuatFromTo(fCur, fDes, qd);
+    QuatMul(qd, qg, qNew);                       // world-space delta applied on the left
+    if (g_cfg.twohandBlend < 1.0) {
+        float qb[4];
+        SlerpQ(qg, qNew, (float)g_cfg.twohandBlend, qb);
+        qNew[0]=qb[0]; qNew[1]=qb[1]; qNew[2]=qb[2]; qNew[3]=qb[3];
+    }
+    QuatNormalizeF(qNew);
+    pg->ThePose.Orientation.x = qNew[0];
+    pg->ThePose.Orientation.y = qNew[1];
+    pg->ThePose.Orientation.z = qNew[2];
+    pg->ThePose.Orientation.w = qNew[3];
+
+    // diagnostic: which hand-local axis lines up best with the hand-to-hand line?
+    // (hold the gun on a target, then read the log - the best axis is the barrel)
+    g_bestAxisDot = -2.0;
+    for (int i = 0; i < 6; i++) {
+        float v[3];
+        QuatRotateVec(qg, kAxes[i], v);
+        double dot = (double)v[0]*fDes[0] + (double)v[1]*fDes[1] + (double)v[2]*fDes[2];
+        if (dot > g_bestAxisDot) { g_bestAxisDot = dot; g_bestAxis = i; }
+    }
+    return true;
 }
 
 // ---------- the hook ----------
@@ -226,6 +370,13 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // opposite of what was wanted.)
     const double mc  = g_cfg.minCutoff    / mult,    bt  = g_cfg.beta    / mult;
     const double mcr = g_cfg.minCutoffRot / multRot, btr = g_cfg.betaRot / multRot;
+
+    // ---- two-handed grip: only while the gate is held, and only if both hands are tracked
+    //      and the off-hand is within a plausible distance of the gun hand ----
+    g_twoHandActive = 0;
+    if (g_cfg.twohand && (g_cfg.twohandGate == 0 || gateHeld)) {
+        if (ApplyTwoHand(st)) g_twoHandActive = 1;
+    }
 
     EnterCriticalSection(&g_fcs);
     if (doSmooth) {
@@ -294,6 +445,13 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
                g_accRawDeg / g_accN, g_accFiltDeg / g_accN,
                (g_accFiltDeg > 1e-9 ? g_accRawDeg / g_accFiltDeg : 0.0), g_accN);
         g_accRawDeg = 0.0; g_accFiltDeg = 0.0; g_accN = 0;
+    }
+
+    // Two-hand status + the axis calibration hint.
+    if (g_twoHandActive && (c % 120) == 0) {
+        Bl2Log("twohand: ACTIVE  gun_hand=%s  using axis %s  |  best-matching axis=%s (%.3f) <- if this is not the axis above, change aim_axis",
+               g_cfg.gunHand == 0 ? "left" : "right", kAxisNames[g_cfg.axisIndex],
+               g_bestAxis >= 0 ? kAxisNames[g_bestAxis] : "?", g_bestAxisDot);
     }
 
     // Once tracking is actually live, dump the raw buffer as floats exactly once.
