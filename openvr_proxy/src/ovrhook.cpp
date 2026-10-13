@@ -278,17 +278,35 @@ static void PollTrigger() {
                    (void*)g_getInputState, g_session);
         return;
     }
-    static const unsigned int kType[2] = { 0x01u /*LTouch*/, 0x02u /*RTouch*/ };
     static ovrInputStateBuf buf;
     const int gun = g_cfg.gunHand;
     // which hand owns the two-hand button: 0 = OFFHAND (default), 1 = the gun hand
     const int btn = (g_cfg.twohandHand == 0) ? (1 - gun) : gun;
 
-    // 1) the GUN hand's index trigger -> the zoom / smoothing gate
+    // Query BOTH Touch controllers in ONE call: ovrControllerType_Touch = LTouch | RTouch.
+    // Per-hand queries (LTouch or RTouch alone) leave the other [left,right] array element
+    // unpopulated on some runtimes, so reading IndexTrigger[gun] after an LTouch/RTouch-only
+    // query could read a slot that was never filled.
+    static const unsigned int kTouch = 0x03u;   // ovrControllerType_Touch
     memset(&buf, 0, sizeof(buf));
-    const int rcGun = g_getInputState(g_session, kType[gun], &buf);
-    g_pollRcGun = rcGun;
-    if (rcGun == 0) {
+
+    // OVR_SUCCESS(result) is (result >= 0) - a POSITIVE code is still valid input. Testing
+    // "== 0" here silently discarded every successful poll, which left the trigger gate dead
+    // and is the real "no smoothing while holding the trigger" bug.
+    const int rc = g_getInputState(g_session, kTouch, &buf);
+    g_pollRcGun = rc;
+    if (rc < 0) {
+        // don't leave a previous trigger/grip value latched when polling fails
+        g_trigger1000 = 0; g_grip1000 = 0; g_btnTrig1000 = 0;
+        static int s_lastErr = 0;
+        if (rc != s_lastErr)
+            Bl2Log("ovr_GetInputState failed: %d (trigger gate unavailable)", rc);
+        s_lastErr = rc;
+        return;
+    }
+
+    // 1) the GUN hand's index trigger -> the zoom / smoothing gate
+    {
         int it = (int)(buf.f.IndexTrigger[gun] * 1000.0f);
         if (it < 0) it = 0; if (it > 1000) it = 1000;
         g_trigger1000 = it;
@@ -296,8 +314,7 @@ static void PollTrigger() {
 
     // 2) grip + index trigger of the BUTTON hand -> the two-hand gate.
     //    Default is the OFFHAND: on the gun hand the grip is the game's reload bind.
-    memset(&buf, 0, sizeof(buf));
-    if (g_getInputState(g_session, kType[btn], &buf) == 0) {
+    {
         int ht = (int)(buf.f.HandTrigger[btn]  * 1000.0f);
         int it = (int)(buf.f.IndexTrigger[btn] * 1000.0f);
         if (ht < 0) ht = 0; if (ht > 1000) ht = 1000;
@@ -306,9 +323,10 @@ static void PollTrigger() {
         g_btnTrig1000 = it;
         if (!g_dumpedInput) {
             g_dumpedInput = true;
-            Bl2Log("--- input dump: gunHand=%s buttonHand=%s | idxTrig=%.3f grip=%.3f Buttons=0x%X Touches=0x%X ---",
-                   gun == 0 ? "left" : "right", btn == 0 ? "left" : "right",
-                   buf.f.IndexTrigger[btn], buf.f.HandTrigger[btn], buf.f.Buttons, buf.f.Touches);
+            Bl2Log("--- input dump: rc=%d gunHand=%s buttonHand=%s | idxTrig[gun]=%.3f idxTrig[btn]=%.3f grip[btn]=%.3f Buttons=0x%X Touches=0x%X ---",
+                   rc, gun == 0 ? "left" : "right", btn == 0 ? "left" : "right",
+                   buf.f.IndexTrigger[gun], buf.f.IndexTrigger[btn], buf.f.HandTrigger[btn],
+                   buf.f.Buttons, buf.f.Touches);
         }
     }
 }
