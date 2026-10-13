@@ -109,8 +109,13 @@ means much less input noise. The idea is *very steady at rest, still fast enough
 
 | Key | Default | Meaning |
 |---|---|---|
-| `twohand_min_cutoff` | 0.25 | low = very heavy / smooth |
-| `twohand_beta` | 0.10 | low = pure slide (no opening up) |
+Two-hand mode now also runs through the bubble (below), so these values are mostly about how
+steady the *locked* gun is — the bubble is what lets you still track with them this low.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `twohand_min_cutoff` | 0.25 | heavy low-pass on the hands while locked |
+| `twohand_beta` | 0.10 | one-euro speed term (keep low for a pure slide) |
 | `twohand_min_cutoff_rot` | 0.05 | rotation equivalent |
 | `twohand_beta_rot` | 0.02 | rotation equivalent |
 
@@ -118,17 +123,53 @@ means much less input noise. The idea is *very steady at rest, still fast enough
 the trigger/zoom block entirely — so a pistol one-handed (trigger only) keeps its own tuning, and
 two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall back to block 1.
 
-**The trade-off you are choosing with `min_cutoff`:** settle time `≈ 1/(2π·cutoff)`.
+---
 
-| cutoff | settle time |
-|---|---|
-| 0.05 Hz | 3.2 s — maximum smoothness, but the gun drifts for a while after you stop |
-| 0.5 Hz | 0.32 s |
-| 1.0 Hz | 0.16 s |
-| 3.0 Hz | 0.05 s |
+## The bubble (why this no longer feels like a laggy filter)
 
-Lower = smoother *and* more drift. That is physics, not a bug: use the lowest value you can aim
-with. Raising `beta` lets the filter open up while moving but does nothing while you are still.
+A plain low-pass forces one knob to do two opposite jobs: "steady when still" and "stops and
+tracks without lag". Those fight. Everything in this section replaces that trade-off.
+
+The technique is taken from **`HandStabilizer` for H3VR**, which solves the same problem
+(gun tremor, CQB → 1000 m sniping):
+
+| Their setting | Value | Our equivalent |
+|---|---|---|
+| Angular Threshold | 0.54 rad/s | `release_rot=0.54` |
+| Position Threshold | 0.13 | `release_pos=0.13` |
+| Attack | 0.20 (soft re-lock) | `attack_ms=200` |
+| Release | 0.04 (fast unlock) | `release_ms=40` |
+
+How it works:
+
+1. **Two thresholds, position and rotation separately** — rotation at distance is what ruins a
+   shot, so it is tuned on its own.
+2. **Below the threshold** the hand is only trembling → heavy smoothing, gun locked.
+3. **Above the threshold** the movement is deliberate → the raw pose passes straight through,
+   1:1, so the gun tracks exactly like a mouse.
+4. **Asymmetric attack/release** — unlock in ~40 ms (no delay when switching targets), re-lock in
+   ~200 ms (a soft landing instead of a snap).
+
+### Why the intent signal must be *signed*
+
+The intent signal is the magnitude of the **low-passed velocity vector**, not `|Δangle|/dt`:
+
+- A tremor is an **oscillation** at 4–12 Hz. Its velocity vectors point both ways, so they
+  cancel out and the low-passed vector stays ~0 → correctly ignored as tremor.
+- `|Δangle|/dt` **cannot** do this: the magnitude of an oscillation has a non-zero mean, so a
+  yaw tremor looks exactly like deliberate movement. That is why the old build was jittery no
+  matter what the cutoff was.
+
+### And why stopping no longer glides
+
+While released, the filter state is pushed **fully onto the raw pose**. So when you stop, there
+is no leftover error to creep away — the bubble closes over a gun that is already where your hand
+is. The old exponential slide (settle time `1/(2π·cutoff)`, seconds of drift at 0.05 Hz) had to
+choose between smooth and usable. This does not.
+
+> Reference values from elsewhere: Meta's Interaction SDK ships its wrist-rotation one-euro
+> filter at `minCutoff 2.0 Hz, beta 3.0` — the 0.05 Hz we were using earlier is 40× heavier than
+> a production rotation filter.
 
 Set `twohand_min_cutoff_rot=0` to fall back to the normal zoom profile.
 **Tuning rule of thumb:** smoother at rest → lower the `min_cutoff`s. Better tracking while

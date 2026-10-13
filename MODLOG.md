@@ -363,3 +363,18 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
      right-hand pose (`HandPoses[ovrHand_Right]`) to the two-hand line.
 - Open item: exact `ovrTrackingState` / `ovrPoseStatef` layout (HeadPose, HandPoses[2], HandStatusFlags[2],
   CalibratedOrigin) — to be confirmed by logging real data, not guessed.
+
+## Bubble release smoothing (HandStabilizer technique)
+
+- Replaced "cutoff as strength" with a velocity-discriminated release ("bubble").
+- Intent signal = magnitude of the LOW-PASSED velocity VECTOR, position and rotation
+  separately. A tremor oscillates so its mean velocity is ~0; |dAngle|/dt cannot
+  discriminate because |oscillation| has a non-zero mean.
+- Asymmetric attack/release: unlock ~40 ms, re-lock ~200 ms (release_ms / attack_ms).
+- While released the state is pushed fully onto the raw pose, so stopping no longer
+  leaves a multi-second glide to creep away.
+- Defaults from HandStabilizer (H3VR): rot 0.54 rad/s, pos 0.13, attack 200 ms, release 40 ms.
+- Two-hand block restored to the heavy slide (0.25/0.10, rot 0.05/0.02) and kept fully
+  separate from the trigger/zoom block - they never combine.
+- Diagnosis: the 20x/60x zoom profile only applies while the trigger is held >= 0.5, so a
+  pistol tap-to-shoot never triggered it (that is what the bubble now covers).
