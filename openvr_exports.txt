@@ -1,0 +1,41 @@
+Microsoft (R) COFF/PE Dumper Version 14.51.36260.0
+Copyright (C) Microsoft Corporation.  All rights reserved.
+
+
+Dump of file C:\Program Files (x86)\Steam\steamapps\common\Borderlands 2 VR\Binaries\Win64\openvr_api.dll
+
+File Type: DLL
+
+  Section contains the following exports for openvr_api.dll
+
+    00000000 characteristics
+    577AD259 time date stamp Tue Jul  5 00:17:13 2016
+        0.00 version
+           1 ordinal base
+          14 number of functions
+          14 number of names
+
+    ordinal hint RVA      name
+
+          1    0 00001BA0 VRControlPanel
+          2    1 00001BF0 VRDashboardManager
+          3    2 00001C40 VRTrackedCameraInternal
+          4    3 00001C90 VR_GetGenericInterface
+          5    4 00001CC0 VR_GetInitToken
+          6    5 00001CD0 VR_GetStringForHmdError
+          7    6 00001CD0 VR_GetVRInitErrorAsEnglishDescription
+          8    7 00001CF0 VR_GetVRInitErrorAsSymbol
+          9    8 00001D10 VR_InitInternal
+         10    9 00001DA0 VR_IsHmdPresent
+         11    A 00001E10 VR_IsInterfaceVersionValid
+         12    B 00001E40 VR_IsRuntimeInstalled
+         13    C 00001F50 VR_RuntimePath
+         14    D 00002050 VR_ShutdownInternal
+
+  Summary
+
+        5000 .data
+        3000 .pdata
+       11000 .rdata
+        1000 .reloc
+       34000 .text
