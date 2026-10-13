@@ -440,3 +440,19 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
   (a second-order follower arrives slower than a first-order at the same smoothTime; the
   earlier table omitted that factor). Retuned: base 3.0 Hz (0.13 s), trigger/two-hand
   1.0 Hz rot (0.38 s) via zoom_mult_rot=3.
+
+## Swapped to the canonical One Euro filter (from BL2VR-grip-fixed-source.zip)
+
+- filters.h replaced with the RAW-velocity-driven One Euro: cutoff = min_cutoff +
+  beta*|raw velocity|. The old follower drove the cutoff from its OWN velocity, which is 0
+  at movement onset, so the filter stayed heavy until a lag built up (the boat), and its
+  stored velocity could drift after a stop. No stored velocity now.
+- catchup_pos/catchup_rot ported into the new filter (continuous lag stiffness, heavy
+  profiles only) and left at 0 by default, which is the validated behaviour.
+- Ini retuned to the no-sub-1-Hz philosophy: base 4.5/3.0 Hz, trigger 2.25/2.0 Hz, two-hand
+  3.0/2.0 Hz, derivative_cutoff=6.0 (reacts to movement onset), trigger_threshold 0.5 ->
+  0.25 (a soft aim-hold never reached 0.5, so the gate stayed shut).
+- Bench (filter_bench.cpp) against the new filter: trigger 0.30 Hz + catchup 120 gives lag
+  0.93/1.79 deg and a 0.08 s float tail, vs 5.26/13.86 deg and 1.28 s for the old values.
+- README rewritten: canonical One Euro section, the bench table, the no-sub-1-Hz rule, the
+  OVR_SUCCESS trigger-gate note, and a corrected dt section.

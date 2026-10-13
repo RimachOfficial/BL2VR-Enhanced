@@ -73,22 +73,24 @@ applies within a moment — no restart needed.
 | `enabled` | 1 | master switch |
 | `smooth_hands` | 1 | smooth both hand poses |
 | `smooth_head` | 0 | smooth the head pose — usually bad (view lag) |
-| `min_cutoff` | 5.0 | position: lower = steadier at rest, laggier |
-| `beta` | 2.0 | position: higher = responds sooner when you move |
-| `min_cutoff_rot` | 3.0 | rotation: same idea, for rotation |
-| `beta_rot` | 1.2 | rotation equivalent of `beta` |
-| `predict_ms` | 0 | extra motion prediction (0 = off) |
+| `min_cutoff` | 4.5 | position cutoff (Hz): lower = steadier at rest, laggier |
+| `beta` | 2.0 | position: how fast the cutoff rises with the RAW speed |
+| `derivative_cutoff` | 6.0 | smooths the speed estimate — kept high so movement onset reacts instantly |
+| `min_cutoff_rot` | 3.0 | rotation cutoff (Hz) |
+| `beta_rot` | 1.5 | rotation equivalent of `beta` |
+| `predict_ms` | 0 | extra motion prediction (0 = off — extrapolation is the one thing that *can* overshoot) |
 
 ### Zoom (trigger) gate
 | Key | Default | Meaning |
 |---|---|---|
 | `trigger_gate` | 1 | 0 = ignore trigger, 1 = stronger while held, 2 = smooth **only** while held |
-| `trigger_threshold` | 0.5 | how far the trigger must be pulled |
-| `zoom_mult` | 20.0 | position is this many times smoother while zoomed |
-| `zoom_mult_rot` | 60.0 | rotation equivalent (3× the position value) |
+| `trigger_threshold` | 0.25 | how far the trigger must be pulled. Keep it low — a soft aim-hold never reached the old 0.5, so the gate stayed shut and the profile never applied |
+| `zoom_mult` | 2.0 | the position cutoff is divided by this while the trigger is held (4.5 → 2.25 Hz) |
+| `zoom_mult_rot` | 1.5 | rotation equivalent (3.0 → 2.0 Hz) |
 
-> Both the cutoff **and** `beta` are divided by these, so zooming makes the filter uniformly
-> heavier — a smooth "slide", not added responsiveness.
+> Both the cutoff **and** `beta` are divided, so holding the trigger makes the filter uniformly
+> heavier — a smooth "slide", not added responsiveness. Keep the results inside the **1.5–4.5 Hz**
+> band: anything below ~1 Hz drifts for about a second after you stop.
 
 ### Two-handed grip
 | Key | Default | Meaning |
@@ -97,7 +99,7 @@ applies within a moment — no restart needed.
 | `twohand_gate` | 1 | 1 = only while the button below is held (recommended), 0 = always on |
 | `twohand_button` | grip | which button engages two-hand mode: `grip` (recommended — the index trigger is also the game's pickup button) or `trigger` |
 | `twohand_hand` | offhand | which **controller** owns that button: `offhand` (the hand *not* holding the gun — recommended, because on the gun hand the grip is the game's **reload** bind) or `gun`. Follows `gun_hand` automatically. |
-| `gun_hand` | right | **which hand holds the gun**: `right` normal, `left` for lefty mode |
+| `gun_hand` | left | **which hand holds the gun**: `right` normal, `left` for lefty mode |
 | `aim_axis` | -z | which local axis of that hand points down the barrel: `+x -x +y -y +z -z` |
 | `twohand_min_dist` | 0.12 | don't engage if the hands are closer than this (metres) |
 | `twohand_max_dist` | 0.75 | …or further apart than this |
@@ -109,10 +111,12 @@ means much less input noise. The idea is *very steady at rest, still fast enough
 
 | Key | Default | Meaning |
 |---|---|---|
-| `twohand_min_cutoff` | 0.8 | smoothing on the hands while two-handing |
-| `twohand_beta` | 1.0 | one-euro speed term (higher = catches up sooner) |
-| `twohand_min_cutoff_rot` | 0.4 | rotation equivalent |
-| `twohand_beta_rot` | 0.6 | rotation equivalent |
+| `twohand_min_cutoff` | 3.0 | position cutoff while two-handing (Hz) |
+| `twohand_beta` | 2.2 | one-euro speed term (higher = catches up sooner) |
+| `twohand_min_cutoff_rot` | 2.0 | rotation cutoff (Hz) |
+| `twohand_beta_rot` | 1.5 | rotation equivalent |
+| `catchup_pos` | 0 | extra stiffness per metre of lag, heavy profiles only (0 = off) |
+| `catchup_rot` | 0 | extra stiffness per radian of lag, heavy profiles only (0 = off) |
 
 **These two blocks never combine.** While two-hand mode is active, the two-hand block *replaces*
 the trigger/zoom block entirely — so a pistol one-handed (trigger only) keeps its own tuning, and
@@ -122,66 +126,91 @@ two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall 
 
 ## How the smoothing works
 
-It is a **second-order critically damped follower** — the same primitive as Unity's `SmoothDamp`
-(Game Programming Gems 4):
+It is the **canonical One Euro filter** (Casiez, Roussel & Vogel 2012), in its correct form:
 
 ```
-acc = w^2 * err - 2*w * v          w = 2 / smoothTime          zeta = 1
+cutoff = min_cutoff + beta * |RAW controller velocity|
+a      = 1 / (1 + tau/dt),   tau = 1 / (2*pi*cutoff)
+pose  += a * (hand - pose)
 ```
 
-A plain low-pass is **not** smooth, and that was a real bug: it reaches its maximum speed in the
-very first frame. Velocity jumps 0 → max instantly, which is infinite acceleration — a kick at the
-start and a hard corner on arrival. That reads as "laggy", not "smooth".
+**The cutoff is driven by the RAW controller motion** — not by the filtered output, and not by a
+follower's own velocity. That distinction is the whole thing:
 
-Here the follower keeps its **own velocity**, which starts at **zero**, ramps up, peaks, then
-decays as it lands. That is the S-curve, and it is what "smooth" actually means.
+- The instant you start moving, the raw velocity is already large, so the cutoff **rises
+  immediately**. The pose never has to build up a lag before the filter lets go — that delay was
+  the "boat" feeling.
+- There is **no stored follower velocity**, so no spring momentum is left over after you stop:
+  nothing carries the aim past the point you stopped at.
+- The residual at the moment you stop is already tiny, because the filter stayed open through the
+  whole movement *including the deceleration*. That is why even a low `min_cutoff` does not float.
 
-```mermaid
-xychart-beta
-    title "Response to one hand move, then hold still (monotonic, never passes 100%)"
-    x-axis "seconds after the move" [0, 0.05, 0.1, 0.2, 0.4, 0.8, 1.6, 3.2]
-    y-axis "followed (%)" 0 --> 100
-    line [0, 0, 0.2, 0.7, 2.7, 9.1, 26.6, 59.7]
-    line [0, 2.4, 8.2, 24.3, 56.2, 89, 99.5, 100]
-    line [0, 24.3, 56.2, 89, 99.5, 100, 100, 100]
+`derivative_cutoff` smooths the speed estimate itself, and is deliberately high (6 Hz) so the
+filter reacts to movement **onset** immediately.
+
+### Measured, not asserted — `filter_bench.cpp` (offline harness, in this repo)
+
+```
+g++ -O2 -std=c++17 -I openvr_proxy filter_bench.cpp -o filter_bench.exe
+./filter_bench.exe
 ```
 
-Series: **0.05 Hz** (drift), **0.375 Hz**, **1.5 Hz**. Note the flat start on every curve — that
-is the velocity ramping from zero.
+| profile (rotation, deg) | lag slow | lag fast | float tail | 2° fix t90 | tremor kept |
+|---|---|---|---|---|---|
+| trigger, old values 0.375 Hz | 5.26 | 13.86 | 1.28 s | 0.96 s | 4.8% |
+| trigger, 0.30 Hz + catchup 120 | **0.93** | **1.79** | **0.08 s** | 0.24 s | 10.4% |
+| two-hand, old 0.4 Hz | 4.29 | 9.29 | 0.92 s | 0.87 s | 5.2% |
+| two-hand, 0.30 Hz + catchup 120 | **0.86** | **1.55** | **0.05 s** | 0.22 s | 10.8% |
 
-**It cannot overshoot.** `zeta = 1` (critically damped) is the fastest response that does not
-overshoot, and Unity's closed-form `exp()` solution is used instead of raw integration so it stays
-stable and frame-rate independent at any frame rate. Measured over a full step response at both
-90 Hz and 163 Hz: peak = exactly 1.000000, overshoot = 0.
+Read the `float tail` column: the old values took **1.28 s** to settle inside 0.5° — that is the
+drift you felt. The new ones take **0.08 s**.
 
-`predict_ms` stays `0`. Extrapolation is the only thing in a chain like this that *could* overshoot.
+### The rule that matters: no sub-1 Hz cutoffs
 
-### Tuning
+| cutoff | lag it forces | verdict |
+|---|---|---|
+| 0.05 Hz | 3.18 s | drifts away |
+| 0.30 Hz | 0.53 s | only usable *with* catch-up or a high beta |
+| 1.5 Hz | 0.11 s | light |
+| 3.0 Hz | 0.05 s | the default band |
+| 4.5 Hz | 0.035 s | nearly raw |
 
-`min_cutoff` still means the same thing, and maps to seconds: `smoothTime = 1/(2*pi*cutoff)`.
-What you actually feel is the **settle time**: `settle(95%) ≈ 2.4 × smoothTime ≈ 0.38 / cutoff`.
-(A second-order follower is slower to *arrive* than a first-order one at the same smoothTime —
-that factor is real, the earlier table omitted it.)
+Keep the cutoffs in the **1.5–4.5 Hz** band and let `beta` do the work. A low cutoff buys
+steadiness and pays for it in drift — that trade-off was the whole tuning saga in this project.
 
-| cutoff | smoothTime | settle (95%) | feel |
-|---|---|---|---|
-| 0.05 Hz | 3.18 s | ~7.6 s | drifts away |
-| 0.4 Hz | 0.40 s | ~0.95 s | heavy |
-| 1.0 Hz | 0.16 s | **~0.38 s** | strong but trackable ← trigger / two-hand default |
-| 3.0 Hz | 0.05 s | ~0.13 s | light, always-on base smoothing |
+### `catchup` — optional, off by default
 
-### The dt bug that made everything feel like molasses
+`catchup_pos` / `catchup_rot` add stiffness proportional to how far behind the pose is, for the
+heavy profiles only:
 
-For most of this project the follower was stepped with `dt=0.0001` — not a real interval, the
-old clamp floor. The game calls `ovr_GetTrackingState` in bursts from more than one thread, so
-the raw per-call QPC delta was meaningless and almost every step got the 0.1 ms floor: the
-follower's clock ran ~55× slower than real time. **Every** profile collapsed into the same
-molasses, which is why no amount of tuning ever felt different and the trigger's multiplier was
-unmeasurable (3.3× vs 3.1× smoother with the trigger held vs not).
+```
+cutoff = min_cutoff + beta*|raw velocity| + catchup*|lag|
+```
 
-`dt` now comes from the **average call rate** (consecutive deltas telescope, so their running
-mean *is* the true interval), guarded against the two-thread race. Verify in
-`openvr_proxy.log`: `dt=` must read ~0.005–0.006, never 0.0001.
+It is a continuous term, so unlike a threshold it cannot toggle while you track a moving enemy.
+It is **0 (off)** by default, which is the validated behaviour; the bench's catch-up rows above
+show what it buys if you want it.
+
+### The trigger gate (`OVR_SUCCESS`)
+
+`ovr_GetInputState` returns **`>= 0`** on success — `OVR_SUCCESS(result)` is `result >= 0`. An
+earlier build tested `== 0`, which **discarded every successful poll** and left the gate dead, so
+the trigger profile never engaged. It also now queries `ovrControllerType_Touch` (LTouch|RTouch) in
+one call, so both `[left,right]` array slots are populated regardless of how a runtime treats
+single-hand queries. `openvr_proxy.log` prints a line on every gate flip with `poll_rc`.
+
+### A note on `dt` (and a wrong turn we took)
+
+`dt` comes from `QueryPerformanceCounter`. The game polls `ovr_GetTrackingState` in bursts from
+more than one thread, so a single call's delta is often tiny — the log shows `dt=0.0001`, which is
+the `1e-4` clamp floor. That is **not** a bug: consecutive deltas telescope, so their sum over a
+second is a second, and the filter's clock stays right. Only sub-0.1 ms deltas are inflated by the
+clamp, a small fraction at the ~5.6 ms average interval.
+
+(An intermediate build replaced this with an EMA of the call interval. That was based on a
+misreading — "dt=0.0001 means the clock runs 55× slow" — which the jitter meter already
+contradicted, since it read 3.3× smoother rather than ~55×. The EMA was reverted; the two forms
+are functionally equivalent.)
 
 `beta` stiffens the spring smoothly as the gun picks up speed (no threshold, so nothing to
 toggle). Higher `beta` = catches up sooner on a fast sweep, at the cost of some of the weight.
