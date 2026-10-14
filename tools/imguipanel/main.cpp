@@ -12,6 +12,8 @@ static ID3D11DeviceContext*    g_pd3dDeviceContext = nullptr;
 static IDXGISwapChain*         g_pSwapChain = nullptr;
 static ID3D11RenderTargetView* g_mainRenderTargetView = nullptr;
 
+static void CreateRenderTarget();
+
 static bool CreateDeviceD3D(HWND hWnd) {
     DXGI_SWAP_CHAIN_DESC sd = {};
     sd.BufferCount = 2;
@@ -39,6 +41,7 @@ static bool CreateDeviceD3D(HWND hWnd) {
             createDeviceFlags, featureLevelArray, 2, D3D11_SDK_VERSION, &sd,
             &g_pSwapChain, &g_pd3dDevice, &featureLevel, &g_pd3dDeviceContext);
     if (res != S_OK) return false;
+    CreateRenderTarget();
     return true;
 }
 static void CleanupDeviceD3D() {
