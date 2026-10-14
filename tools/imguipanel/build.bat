@@ -8,7 +8,8 @@ cl /nologo /O2 /EHsc /std:c++17 ^
    main.cpp ^
    imgui\imgui.cpp imgui\imgui_draw.cpp imgui\imgui_tables.cpp imgui\imgui_widgets.cpp ^
    imgui\backends\imgui_impl_win32.cpp imgui\backends\imgui_impl_dx11.cpp ^
-   /link d3d11.lib dxgi.lib /OUT:build\bl2vr_panel.exe
+   /link d3d11.lib dxgi.lib shell32.lib ole32.lib advapi32.lib /OUT:build\bl2vr_panel.exe
 if errorlevel 1 exit /b 1
+if exist "%~dp0..\..\openvr_proxy\build\openvr_api.dll" copy /y "%~dp0..\..\openvr_proxy\build\openvr_api.dll" "%~dp0build\openvr_api.dll" >nul
 echo.
-echo Built: %~dp0build\bl2vr_panel.exe
+echo Built: %~dp0build\bl2vr_panel.exe  (bundles openvr_api.dll next to it)

@@ -95,13 +95,21 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    ImGui::GetIO().IniFilename = nullptr;   // no imgui.ini on disk
     ImGui::StyleColorsDark();
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
+    Patcher p;
+    p.dllSrc = ExeDir() + "openvr_api.dll";
+    p.gameWin64 = FindGameFolder();
+    p.found = !p.gameWin64.empty();
+    p.gameExe = p.found ? p.gameWin64 + "Borderlands2VR.exe" : "";
+    p.status = p.found ? "" : "Game not found - click Detect.";
+
     IniFile ini;
-    char path[512] = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Borderlands 2 VR\\Binaries\\Win64\\bl2vr_grip.ini";
-    ini.Load(path);
+    std::string iniPath = p.found ? p.gameWin64 + "bl2vr_grip.ini" : "bl2vr_grip.ini";
+    ini.Load(iniPath);
 
     bool done = false;
     while (!done) {
@@ -128,7 +136,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) done = true;
 
         // custom title strip: drag region + close button
-        ImGui::TextUnformatted("BL2VR Grip - Config");
+        ImGui::TextUnformatted("BL2VR Grip - Launcher");
         float xw = ImGui::CalcTextSize(" X ").x + 16.0f;
         ImGui::SameLine(ImGui::GetWindowWidth() - xw - 8.0f);
         if (ImGui::Button("X")) done = true;
@@ -150,7 +158,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
             SetWindowPos(hwnd, nullptr, c.x - dragDX, c.y - dragDY, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
         }
 
-        DrawUI(ini, path, sizeof(path));
+        DrawUI(ini, p);
         ImGui::End();
         ImGui::Render();
 

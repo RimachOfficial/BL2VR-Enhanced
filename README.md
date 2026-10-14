@@ -264,16 +264,19 @@ actually aiming at something** — that is when the hand-to-hand line and the ba
   lower `twohand_blend`.
 - Built with AI assistance.
 
-## Config panel (desktop, no headset needed)
+## Launcher + config panel (desktop)
 
-A standalone ImGui + Win32 + DX11 tool that edits `bl2vr_grip.ini` while the game runs — the mod
-hot-reloads every ~2 s, so changes apply live in a normal desktop window.
+`tools\imguipanel\build\bl2vr_panel.exe` is a standalone launcher/patcher (ImGui + Win32 + DX11),
+shipped with `openvr_api.dll` beside it.
 
-- Build: `tools\imguipanel\build.bat` → `tools\imguipanel\build\bl2vr_panel.exe`
-- Run it and drag the sliders / pick combos; the file is saved on every change.
-- The path is editable at the top (defaults to the game's `Binaries\Win64\bl2vr_grip.ini`).
+- **Detect** auto-finds the game from Steam (registry + `libraryfolders.vdf`).
+- **Patch game** copies `openvr_api.dll` and writes `bl2vr_grip.ini` into `Binaries\Win64\`.
+- **Create desktop shortcut** makes a `BL2VR (enhanced)` shortcut that launches the game.
+- Every control has a friendly name + hover description; edits are saved live (the mod
+  hot-reloads ~2 s).
 
-ImGui (MIT) is vendored under `tools\imguipanel\imgui\`, so the build is self-contained.
+Build with `tools\imguipanel\build.bat` (it also bundles `openvr_api.dll` next to the exe).
+ImGui (MIT) is vendored under `tools\imguipanel\imgui\`.
 
 ## Credits / prior art
 

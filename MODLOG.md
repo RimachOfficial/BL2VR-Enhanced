@@ -466,3 +466,13 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
   bl2vr_grip.ini live (the mod hot-reloads ~2 s, so changes apply while the game runs).
   Values are edited in-place so comments survive; ImGui v1.91.6 (MIT) is vendored. Build:
   tools/imguipanel/build.bat -> build/bl2vr_panel.exe.
+
+## Panel -> launcher/patcher (friendly names, auto-detect, patch, shortcut)
+
+- Rewrote tools/imguipanel into a standalone launcher/patcher: Detect (Steam registry +
+  libraryfolders.vdf) -> Patch game (copies bundled openvr_api.dll + writes ini) ->
+  Create desktop shortcut (BL2VR (enhanced).lnk launching Borderlands2VR.exe).
+- ui.h: friendly labels + hover descriptions for every key, config in a scrolling child.
+- game.h: ExeDir/FindGameFolder/PatchGame/CreateShortcut (COM IShellLink). build.bat links
+  shell32/ole32/advapi32 and bundles openvr_api.dll next to the exe.
+- Also fixed: CreateRenderTarget() was missing (black window); ImGui IniFilename=null.
