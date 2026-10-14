@@ -73,6 +73,30 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
             CreateRenderTarget();
         }
         return 0;
+    case WM_NCHITTEST: {
+        POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+        RECT r; GetWindowRect(hWnd, &r);
+        const int m = 8;   // resize margin
+        bool l = pt.x < r.left + m,  rr = pt.x >= r.right - m;
+        bool t = pt.y < r.top + m,   bb = pt.y >= r.bottom - m;
+        if (t && l)  return HTTOPLEFT;
+        if (t && rr) return HTTOPRIGHT;
+        if (bb && l) return HTBOTTOMLEFT;
+        if (bb && rr) return HTBOTTOMRIGHT;
+        if (l)  return HTLEFT;
+        if (rr) return HTRIGHT;
+        if (t)  return HTTOP;
+        if (bb) return HTBOTTOM;
+        // title strip drag (leave the top-right X button clickable)
+        if (pt.y >= r.top && pt.y < r.top + 26 && pt.x < r.right - 44) return HTCAPTION;
+        break;
+    }
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+        mmi->ptMinTrackSize.x = 360;
+        mmi->ptMinTrackSize.y = 420;
+        return 0;
+    }
     case WM_SYSCOMMAND:
         if ((wParam & 0xfff0) == SC_KEYMENU) return 0;   // keep Alt from stealing focus
         break;
@@ -88,7 +112,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
                        L"BL2VRGripPanel", nullptr };
     RegisterClassExW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"BL2VR Grip",
-                              WS_POPUP, 100, 80, 480, 740, nullptr, nullptr, wc.hInstance, nullptr);
+                              WS_POPUP | WS_THICKFRAME, 100, 80, 480, 740, nullptr, nullptr, wc.hInstance, nullptr);
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); UnregisterClassW(wc.lpszClassName, wc.hInstance); return 1; }
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
@@ -132,31 +156,14 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
 
-        ImGuiIO& io = ImGui::GetIO();
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) done = true;
 
-        // custom title strip: drag region + close button
+        // title strip: drag region (native via WM_NCHITTEST) + close button
         ImGui::TextUnformatted("BL2VR Grip - Launcher");
         float xw = ImGui::CalcTextSize(" X ").x + 16.0f;
         ImGui::SameLine(ImGui::GetWindowWidth() - xw - 8.0f);
         if (ImGui::Button("X")) done = true;
-        float btnLeft = ImGui::GetItemRectMin().x;
         ImGui::Separator();
-
-        static bool dragging = false;
-        static int  dragDX = 0, dragDY = 0;
-        if (io.MouseDown[0] && io.MousePos.y < 26.0f && io.MousePos.x < btnLeft) {
-            if (!dragging) {
-                dragging = true;
-                POINT c; GetCursorPos(&c); RECT r; GetWindowRect(hwnd, &r);
-                dragDX = c.x - r.left; dragDY = c.y - r.top;
-            }
-        }
-        if (!io.MouseDown[0]) dragging = false;
-        if (dragging) {
-            POINT c; GetCursorPos(&c);
-            SetWindowPos(hwnd, nullptr, c.x - dragDX, c.y - dragDY, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
-        }
 
         DrawUI(ini, p);
         ImGui::End();
