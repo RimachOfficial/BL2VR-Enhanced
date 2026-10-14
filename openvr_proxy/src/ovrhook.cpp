@@ -79,26 +79,88 @@ static const float kAxes[6][3] = {
 static const char* kAxisNames[6] = { "+x", "-x", "+y", "-y", "+z", "-z" };
 static char g_ini[MAX_PATH] = { 0 };
 
+// ---- single-read ini access (replaces ~30 GetPrivateProfile* calls per reload, each of
+// which opened and re-read the file from disk; now it is one read + an in-memory scan) ----
+static char   g_iniBuf[8192] = { 0 };
+static size_t g_iniLen = 0;
+
+static bool IniLoad() {
+    g_iniLen = 0;
+    FILE* f = nullptr;
+    if (fopen_s(&f, g_ini, "rb") != 0 || !f) return false;
+    g_iniLen = fread(g_iniBuf, 1, sizeof(g_iniBuf) - 1, f);
+    fclose(f);
+    g_iniBuf[g_iniLen] = 0;
+    return g_iniLen > 0;
+}
+
+// Find "key = value" in the already-loaded buffer. Case-insensitive, tolerates whitespace
+// around the key, the '=', and the value; ignores ';' comment lines naturally (no '=').
+static bool IniGet(const char* key, char* out, size_t outsz) {
+    if (!out || !outsz) return false;
+    out[0] = 0;
+    const size_t klen = strlen(key);
+    const char* end = g_iniBuf + g_iniLen;
+    const char* p = g_iniBuf;
+    while (p < end) {
+        const char* ln = p;
+        while (ln < end && (*ln == ' ' || *ln == '\t')) ln++;
+        if (ln >= end) break;
+        const char* nl = ln;
+        while (nl < end && *nl != '\n' && *nl != '\r') nl++;
+        const char* eq = ln;
+        while (eq < nl && *eq != '=') eq++;
+        if (eq < nl) {
+            const char* ke = eq;
+            while (ke > ln && (ke[-1] == ' ' || ke[-1] == '\t')) ke--;
+            if ((size_t)(ke - ln) == klen && _strnicmp(ln, key, klen) == 0) {
+                const char* v = eq + 1;
+                while (v < nl && (*v == ' ' || *v == '\t')) v++;
+                const char* ve = nl;
+                while (ve > v && (ve[-1] == ' ' || ve[-1] == '\t' || ve[-1] == '\r')) ve--;
+                size_t vlen = (size_t)(ve - v);
+                if (vlen >= outsz) vlen = outsz - 1;
+                if (vlen) memcpy(out, v, vlen);
+                out[vlen] = 0;
+                return vlen > 0;
+            }
+        }
+        p = nl;
+        while (p < end && (*p == '\n' || *p == '\r')) p++;
+    }
+    return false;
+}
+
 static double CfgD(const char* key, double def) {
     char b[128] = { 0 };
-    GetPrivateProfileStringA("bl2vr_grip", key, "", b, sizeof(b), g_ini);
-    double d = 0.0;
-    if (b[0] && sscanf_s(b, "%lf", &d) == 1) return d;
+    if (IniGet(key, b, sizeof(b)) && b[0]) {
+        double d = 0.0;
+        if (sscanf_s(b, "%lf", &d) == 1) return d;
+    }
+    return def;
+}
+static int CfgI(const char* key, int def) {
+    char b[64] = { 0 };
+    if (IniGet(key, b, sizeof(b)) && b[0]) {
+        int v = 0;
+        if (sscanf_s(b, "%d", &v) == 1) return v;
+    }
     return def;
 }
 static void LoadCfg() {
-    g_cfg.enabled     = GetPrivateProfileIntA("bl2vr_grip", "enabled", 1, g_ini);
-    g_cfg.log         = GetPrivateProfileIntA("bl2vr_grip", "log", 1, g_ini);
-    g_cfg.logFrames   = GetPrivateProfileIntA("bl2vr_grip", "log_frames", 400, g_ini);
-    g_cfg.smoothHands = GetPrivateProfileIntA("bl2vr_grip", "smooth_hands", 1, g_ini);
-    g_cfg.smoothHead  = GetPrivateProfileIntA("bl2vr_grip", "smooth_head", 0, g_ini);
+    if (!IniLoad()) return;              // one read of the whole file
+    g_cfg.enabled     = CfgI("enabled", 1);
+    g_cfg.log         = CfgI("log", 1);
+    g_cfg.logFrames   = CfgI("log_frames", 400);
+    g_cfg.smoothHands = CfgI("smooth_hands", 1);
+    g_cfg.smoothHead  = CfgI("smooth_head", 0);
     g_cfg.minCutoff    = CfgD("min_cutoff", 3.0);
     g_cfg.beta         = CfgD("beta", 1.0);
     g_cfg.derivCutoff  = CfgD("derivative_cutoff", 1.0);
     g_cfg.minCutoffRot = CfgD("min_cutoff_rot", 2.0);
     g_cfg.betaRot      = CfgD("beta_rot", 0.6);
     g_cfg.predictMs    = CfgD("predict_ms", 0.0);
-    g_cfg.triggerGate      = GetPrivateProfileIntA("bl2vr_grip", "trigger_gate", 1, g_ini);
+    g_cfg.triggerGate      = CfgI("trigger_gate", 1);
     g_cfg.triggerThreshold = CfgD("trigger_threshold", 0.5);
     g_cfg.zoomMult         = CfgD("zoom_mult", 20.0);
     g_cfg.zoomMultRot      = CfgD("zoom_mult_rot", 0.0);   // 0 = same as zoom_mult
@@ -106,28 +168,28 @@ static void LoadCfg() {
     if (g_cfg.zoomMultRot < 0.0) g_cfg.zoomMultRot = 0.0;
 
     // ---- two-handed grip ----
-    g_cfg.twohand     = GetPrivateProfileIntA("bl2vr_grip", "twohand", 1, g_ini);
-    g_cfg.twohandGate = GetPrivateProfileIntA("bl2vr_grip", "twohand_gate", 1, g_ini);
+    g_cfg.twohand     = CfgI("twohand", 1);
+    g_cfg.twohandGate = CfgI("twohand_gate", 1);
     {
         char tb[32] = { 0 };
-        GetPrivateProfileStringA("bl2vr_grip", "twohand_button", "grip", tb, sizeof(tb), g_ini);
+        IniGet("twohand_button", tb, sizeof(tb));
         g_cfg.twohandButton = (tb[0] == 't' || tb[0] == 'T') ? 1 : 0;   // 0 = grip, 1 = trigger
     }
     {
         char gh[32] = { 0 };
-        GetPrivateProfileStringA("bl2vr_grip", "gun_hand", "right", gh, sizeof(gh), g_ini);
+        IniGet("gun_hand", gh, sizeof(gh));
         g_cfg.gunHand = (gh[0] == 'l' || gh[0] == 'L') ? 0 : 1;      // 0 = left, 1 = right
     }
     {
         char ax[16] = { 0 };
-        GetPrivateProfileStringA("bl2vr_grip", "aim_axis", "-z", ax, sizeof(ax), g_ini);
+        IniGet("aim_axis", ax, sizeof(ax));
         int idx = 5;
         for (int i = 0; i < 6; i++) if (_stricmp(ax, kAxisNames[i]) == 0) { idx = i; break; }
         g_cfg.axisIndex = idx;
     }
     {
         char hh[32] = { 0 };
-        GetPrivateProfileStringA("bl2vr_grip", "twohand_hand", "offhand", hh, sizeof(hh), g_ini);
+        IniGet("twohand_hand", hh, sizeof(hh));
         g_cfg.twohandHand = (hh[0] == 'g' || hh[0] == 'G') ? 1 : 0;   // 0 = offhand, 1 = gun hand
     }
     g_cfg.twohandMaxDist = CfgD("twohand_max_dist", 0.75);

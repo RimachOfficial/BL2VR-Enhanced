@@ -456,3 +456,13 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
   0.93/1.79 deg and a 0.08 s float tail, vs 5.26/13.86 deg and 1.28 s for the old values.
 - README rewritten: canonical One Euro section, the bench table, the no-sub-1-Hz rule, the
   OVR_SUCCESS trigger-gate note, and a corrected dt section.
+
+## LoadCfg single-read + desktop ImGui config panel
+
+- LoadCfg no longer makes ~30 GetPrivateProfile* calls per reload (each re-opened the ini
+  from disk). It now reads the file once into an 8 KB buffer and parses key=value in memory;
+  IniGet / CfgD / CfgI replace every GetPrivateProfileIntA/StringA call.
+- New tools/imguipanel/: a standalone ImGui + Win32 + DX11 desktop .exe that edits
+  bl2vr_grip.ini live (the mod hot-reloads ~2 s, so changes apply while the game runs).
+  Values are edited in-place so comments survive; ImGui v1.91.6 (MIT) is vendored. Build:
+  tools/imguipanel/build.bat -> build/bl2vr_panel.exe.

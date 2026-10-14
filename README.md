@@ -264,6 +264,17 @@ actually aiming at something** — that is when the hand-to-hand line and the ba
   lower `twohand_blend`.
 - Built with AI assistance.
 
+## Config panel (desktop, no headset needed)
+
+A standalone ImGui + Win32 + DX11 tool that edits `bl2vr_grip.ini` while the game runs — the mod
+hot-reloads every ~2 s, so changes apply live in a normal desktop window.
+
+- Build: `tools\imguipanel\build.bat` → `tools\imguipanel\build\bl2vr_panel.exe`
+- Run it and drag the sliders / pick combos; the file is saved on every change.
+- The path is editable at the top (defaults to the game's `Binaries\Win64\bl2vr_grip.ini`).
+
+ImGui (MIT) is vendored under `tools\imguipanel\imgui\`, so the build is self-contained.
+
 ## Credits / prior art
 
 Implemented at the Oculus runtime boundary using [MinHook](https://github.com/TsudaKageyu/minhook).
