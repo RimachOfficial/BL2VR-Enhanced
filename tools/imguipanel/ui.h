@@ -105,10 +105,10 @@ static void DrawUI(IniFile& ini, Patcher& p) {
       FloatKey(ini, "twohand_blend", "Snap strength", "How hard the aim snaps to the line. 1 = fully locked.", 0.0f, 1.0f, "%.2f");
     }
     { Section("Two-hand smoothing profile");
-      FloatKey(ini, "twohand_min_cutoff", "Position cutoff (Hz)", "Position steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
-      FloatKey(ini, "twohand_beta", "Position beta", "How fast it opens up when you move while two-handing.", 0.0f, 20.0f, "%.2f");
-      FloatKey(ini, "twohand_min_cutoff_rot", "Rotation cutoff (Hz)", "Rotation steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
-      FloatKey(ini, "twohand_beta_rot", "Rotation beta", "", 0.0f, 20.0f, "%.2f");
+      FloatKey(ini, "twohand_min_cutoff", "Position cutoff (Hz)##2h", "Position steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
+      FloatKey(ini, "twohand_beta", "Position beta##2h", "How fast it opens up when you move while two-handing.", 0.0f, 20.0f, "%.2f");
+      FloatKey(ini, "twohand_min_cutoff_rot", "Rotation cutoff (Hz)##2h", "Rotation steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
+      FloatKey(ini, "twohand_beta_rot", "Rotation beta##2h", "", 0.0f, 20.0f, "%.2f");
     }
     { Section("Catch-up");
       FloatKey(ini, "catchup_pos", "Position catch-up", "Extra stiffness per metre of lag. 0 = off. Kills a big lag without touching a small tremor.", 0.0f, 1000.0f, "%.0f");
