@@ -84,8 +84,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr,
                        L"BL2VRGripPanel", nullptr };
     RegisterClassExW(&wc);
-    HWND hwnd = CreateWindowW(wc.lpszClassName, L"BL2VR Grip - Config Panel",
-                              WS_OVERLAPPEDWINDOW, 100, 80, 500, 760, nullptr, nullptr, wc.hInstance, nullptr);
+    HWND hwnd = CreateWindowW(wc.lpszClassName, L"BL2VR Grip",
+                              WS_POPUP, 100, 80, 480, 740, nullptr, nullptr, wc.hInstance, nullptr);
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); UnregisterClassW(wc.lpszClassName, wc.hInstance); return 1; }
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
@@ -113,10 +113,45 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         ImGui::NewFrame();
+
+        // The ImGui window IS the panel: one borderless, full-size window.
+        ImGui::SetNextWindowPos(ImVec2(0, 0));
+        ImGui::SetNextWindowSize(ImGui::GetIO().DisplaySize);
+        ImGui::Begin("BL2VR Grip", nullptr,
+            ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        ImGuiIO& io = ImGui::GetIO();
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape)) done = true;
+
+        // custom title strip: drag region + close button
+        ImGui::TextUnformatted("BL2VR Grip - Config");
+        float xw = ImGui::CalcTextSize(" X ").x + 16.0f;
+        ImGui::SameLine(ImGui::GetWindowWidth() - xw - 8.0f);
+        if (ImGui::Button("X")) done = true;
+        float btnLeft = ImGui::GetItemRectMin().x;
+        ImGui::Separator();
+
+        static bool dragging = false;
+        static int  dragDX = 0, dragDY = 0;
+        if (io.MouseDown[0] && io.MousePos.y < 26.0f && io.MousePos.x < btnLeft) {
+            if (!dragging) {
+                dragging = true;
+                POINT c; GetCursorPos(&c); RECT r; GetWindowRect(hwnd, &r);
+                dragDX = c.x - r.left; dragDY = c.y - r.top;
+            }
+        }
+        if (!io.MouseDown[0]) dragging = false;
+        if (dragging) {
+            POINT c; GetCursorPos(&c);
+            SetWindowPos(hwnd, nullptr, c.x - dragDX, c.y - dragDY, 0, 0, SWP_NOSIZE | SWP_NOZORDER);
+        }
+
         DrawUI(ini, path, sizeof(path));
+        ImGui::End();
         ImGui::Render();
 
-        const float clear[4] = { 0.06f, 0.06f, 0.09f, 1.0f };
+        const float clear[4] = { 0.06f, 0.06f, 0.07f, 1.0f };
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
