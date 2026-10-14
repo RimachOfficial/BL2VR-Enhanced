@@ -26,12 +26,18 @@ static void BoolKey(IniFile& ini, const char* key, const char* label, const char
     if (ImGui::Checkbox(label, &b)) ini.SetAndSave(key, b ? "1" : "0");
     Desc(d);
 }
+// opts = displayed labels, vals = what is written into the ini. They differ for numeric
+// keys: the ini holds canonical "0"/"1"/"2", the UI shows "0 = ignore" etc. Legacy ini
+// values that embed the label ("1 = stronger while held") still match by prefix.
 static void ComboKey(IniFile& ini, const char* key, const char* label, const char* d,
-                     const char* const* opts, int n) {
-    std::string cur = ini.Get(key, opts[0]);
+                     const char* const* opts, const char* const* vals, int n) {
+    std::string cur = ini.Get(key, vals[0]);
     int idx = 0;
-    for (int i = 0; i < n; i++) if (cur == opts[i]) { idx = i; break; }
-    if (ImGui::Combo(label, &idx, opts, n)) ini.SetAndSave(key, opts[idx]);
+    for (int i = 0; i < n; i++) {
+        const size_t L = strlen(vals[i]);
+        if (cur.compare(0, L, vals[i]) == 0 && (cur.size() == L || cur[L] == ' ')) { idx = i; break; }
+    }
+    if (ImGui::Combo(label, &idx, opts, n)) ini.SetAndSave(key, vals[idx]);
     Desc(d);
 }
 static void Section(const char* t) {
@@ -84,7 +90,11 @@ static void DrawUI(IniFile& ini, Patcher& p) {
     }
     { Section("Trigger (aim / zoom) gate");
       static const char* tg[] = { "0 = ignore", "1 = stronger while held", "2 = only while held" };
-      ComboKey(ini, "trigger_gate", "Trigger gate", "When the stronger trigger profile applies. 1 is the usual choice.", tg, 3);
+      static const char* tgv[] = { "0", "1", "2" };
+      ComboKey(ini, "trigger_gate", "Trigger gate", "When the stronger trigger profile applies. 1 is the usual choice.", tg, tgv, 3);
+      static const char* zh[] = { "gun hand", "offhand", "either" };
+      static const char* zhv[] = { "gun", "offhand", "either" };
+      ComboKey(ini, "zoom_hand", "Trigger hand", "Which controller trigger drives this gate. either = whichever pulls harder - pick this if the game aim bind sits on the other hand.", zh, zhv, 3);
       FloatKey(ini, "trigger_threshold", "Trigger threshold", "How far the trigger must be pulled to count as held. Keep it low.", 0.0f, 1.0f, "%.2f");
       FloatKey(ini, "zoom_mult", "Aim position strength", "How much heavier position smoothing gets while the trigger is held.", 1.0f, 100.0f, "%.2f");
       FloatKey(ini, "zoom_mult_rot", "Aim rotation strength", "Same, for rotation - the important one while aiming.", 0.0f, 100.0f, "%.2f");
@@ -93,21 +103,26 @@ static void DrawUI(IniFile& ini, Patcher& p) {
       BoolKey(ini, "twohand", "Two-hand grip", "Lock the gun aim to the line between your two hands.");
       BoolKey(ini, "twohand_gate", "Require button", "Only engage while the button below is held.");
       static const char* btn[] = { "grip", "trigger" };
-      ComboKey(ini, "twohand_button", "Two-hand button", "Which button engages two-hand mode.", btn, 2);
+      ComboKey(ini, "twohand_button", "Two-hand button", "Which button engages two-hand mode.", btn, btn, 2);
       static const char* hh[] = { "offhand", "gun" };
-      ComboKey(ini, "twohand_hand", "Button hand", "Which controller owns that button. offhand avoids the game's reload bind.", hh, 2);
+      ComboKey(ini, "twohand_hand", "Button hand", "Which controller owns that button. offhand avoids the game reload bind.", hh, hh, 2);
       static const char* gh[] = { "left", "right" };
-      ComboKey(ini, "gun_hand", "Gun hand", "Which hand holds the gun. left = lefty mode.", gh, 2);
+      ComboKey(ini, "gun_hand", "Gun hand", "Which hand holds the gun. left = lefty mode.", gh, gh, 2);
       static const char* ax[] = { "+x", "-x", "+y", "-y", "+z", "-z" };
-      ComboKey(ini, "aim_axis", "Barrel axis", "Which local axis of the gun hand points down the barrel.", ax, 6);
+      ComboKey(ini, "aim_axis", "Barrel axis", "Which local axis of the gun hand points down the barrel.", ax, ax, 6);
       FloatKey(ini, "twohand_min_dist", "Min hand distance", "Ignore the grip if the hands are closer than this (metres).", 0.0f, 2.0f, "%.3f");
       FloatKey(ini, "twohand_max_dist", "Max hand distance", "Ignore the grip if the hands are further apart than this.", 0.0f, 2.0f, "%.3f");
       FloatKey(ini, "twohand_blend", "Snap strength", "How hard the aim snaps to the line. 1 = fully locked.", 0.0f, 1.0f, "%.2f");
     }
-    { Section("Two-hand smoothing profile");
-      FloatKey(ini, "twohand_min_cutoff", "Position cutoff (Hz)##2h", "Position steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
+    { Section("Virtual gunstock (two-hand aim)");
+      FloatKey(ini, "stock_cutoff", "Stock steadiness (Hz)", "How fast the aim follows the line between your hands. Lower = the stock leans the aim slowly instead of snapping when you move the main hand. Floored at 1 Hz.", 1.0f, 30.0f, "%.2f");
+      FloatKey(ini, "stock_beta", "Stock wake-up", "How fast the stock follows when you deliberately swing the aim.", 0.0f, 20.0f, "%.2f");
+      FloatKey(ini, "stock_zoom_mult", "Trigger stock weight", "While the trigger is held the stock gets this many times heavier (1 Hz floor). This is the zoom feel in two-hand mode.", 1.0f, 20.0f, "%.1f");
+    }
+    { Section("Two-hand filter override (0 = base)");
+      FloatKey(ini, "twohand_min_cutoff", "Position cutoff (Hz)##2h", "Hand-filter override while two-handing. 0 = use the base/trigger profile (recommended - the stock line has its own filter).", 0.0f, 30.0f, "%.2f");
       FloatKey(ini, "twohand_beta", "Position beta##2h", "How fast it opens up when you move while two-handing.", 0.0f, 20.0f, "%.2f");
-      FloatKey(ini, "twohand_min_cutoff_rot", "Rotation cutoff (Hz)##2h", "Rotation steadiness while two-handing.", 0.1f, 30.0f, "%.2f");
+      FloatKey(ini, "twohand_min_cutoff_rot", "Rotation cutoff (Hz)##2h", "0 = use the base/trigger profile (recommended).", 0.0f, 30.0f, "%.2f");
       FloatKey(ini, "twohand_beta_rot", "Rotation beta##2h", "", 0.0f, 20.0f, "%.2f");
     }
     { Section("Catch-up");

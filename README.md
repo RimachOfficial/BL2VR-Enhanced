@@ -4,14 +4,17 @@ A DLL-proxy mod for **Borderlands 2 VR** (Steam AppID 991260, version 1.0.462.21
 
 Two features, driven by your controller buttons (both changeable in the ini):
 
-1. **Two-handed grip** — while you hold the **grip button** (default) the gun aims along the
-   **line between your two hands**. Your hands stay completely free to slide back and forth along
-   the grip; only the *aim direction* is locked to the line. Move the off-hand and the gun rotates
-   with it. The button always belongs to the **hand holding the gun**, so normal and lefty layouts
-   both work.
+1. **Virtual gunstock (two-handed grip)** — while you hold the **grip button** (default) the gun
+   aims along the **line between your two hands**. Your hands stay completely free to slide back
+   and forth along the grip; only the *aim direction* is locked to the line. The line passes
+   through **its own low-pass filter**, so a quick movement of the main hand only *leans* the aim
+   like a real stock braced against the shoulder — it never snaps. Move the off-hand and the gun
+   rotates with it.
 2. **Rotation smoothing** — your hand poses are run through a One Euro filter, so the small
-   tremble that ruins long-range shots is removed. It gets much heavier while the **index trigger**
-   (the zoom bind) is held — that is the setting that matters for snipers.
+   tremble that ruins long-range shots is removed. **Every system builds on this base**: the
+   hands are filtered first, and the stock line is derived from the *filtered* hands. It gets
+   much heavier while the **index trigger** is held — and the trigger now also makes the stock
+   heavier (that is the zoom feel), in both one-handed and two-hand mode.
 
 Works in **normal and lefty layouts** (see `gun_hand`).
 
@@ -40,7 +43,8 @@ Works in **normal and lefty layouts** (see `gun_hand`).
   DLL forwards every OpenVR export to the original and hosts the payload.
 - A worker thread waits for VD's Oculus runtime to appear, then installs a **MinHook** detour on
   **`ovr_GetTrackingState`**, the call the game uses to read controller poses.
-- Each call: optionally apply the two-hand solve, then run both hand poses through the filter.
+- Each call: both hand poses run through the filter **first**, then the virtual gunstock solve
+  runs on the *filtered* hands — smoothing is the base of everything.
 - All struct layouts were taken from the generated Oculus SDK bindings (not guessed) and then
   **confirmed against a raw dump of the live tracking state** on real hardware.
 - A built-in **jitter meter** prints how much the right-hand rotation actually moved per call,
@@ -50,15 +54,19 @@ Log file: `Binaries\Win64\openvr_proxy.log` (or `%LOCALAPPDATA%\BL2VR-grip\openv
 
 ---
 
-## How the two-hand solve works
+## How the two-hand solve works (virtual gunstock)
 
 ```
-forward = normalize(offhand_position - gunhand_position)
+aim_line = normalize(filtered_offhand_pos - filtered_gunhand_pos)
+aim_line = OneEuro_lowpass(aim_line, stock_cutoff, stock_beta)   <- the stock's inertia
+gun orientation = rotate(barrel_axis -> aim_line) * gun orientation
 ```
 
-The gun hand's orientation gets a **delta rotation** that points its barrel axis along that line.
-Because it is a delta on top of the raw pose, the game's own per-weapon "how the gun sits in the
-hand" offset is preserved. **Positions are never modified.**
+The hands are filtered first (base/trigger profile), the line between them is then smoothed once
+more by its **own** One Euro filter, and only that smoothed line drives the gun. Because it is a
+delta on top of the filtered pose, the game's own per-weapon "how the gun sits in the hand" offset
+is preserved. **Positions are never modified** — the hands stay free to slide along the grip, and
+a quick main-hand movement only leans the aim instead of throwing it.
 
 ---
 
@@ -84,13 +92,15 @@ applies within a moment — no restart needed.
 | Key | Default | Meaning |
 |---|---|---|
 | `trigger_gate` | 1 | 0 = ignore trigger, 1 = stronger while held, 2 = smooth **only** while held |
-| `trigger_threshold` | 0.25 | how far the trigger must be pulled. Keep it low — a soft aim-hold never reached the old 0.5, so the gate stayed shut and the profile never applied |
-| `zoom_mult` | 2.0 | the position cutoff is divided by this while the trigger is held (4.5 → 2.25 Hz) |
-| `zoom_mult_rot` | 1.5 | rotation equivalent (3.0 → 2.0 Hz) |
+| `zoom_hand` | either | which controller's trigger drives the gate: `gun` / `offhand` / `either` (whichever pulls harder). `either` keeps the gate working even when the game's aim bind sits on the other controller |
+| `trigger_threshold` | 0.25 | how far the trigger must be pulled. Keep it low |
+| `zoom_mult` | 20 | the position cutoff is divided by this while the trigger is held |
+| `zoom_mult_rot` | 2 | rotation equivalent |
 
 > Both the cutoff **and** `beta` are divided, so holding the trigger makes the filter uniformly
 > heavier — a smooth "slide", not added responsiveness. Keep the results inside the **1.5–4.5 Hz**
-> band: anything below ~1 Hz drifts for about a second after you stop.
+> band: anything below ~1 Hz drifts for about a second after you stop. In two-hand mode the
+> trigger instead makes the **stock** heavier (`stock_zoom_mult`), see below.
 
 ### Two-handed grip
 | Key | Default | Meaning |
@@ -105,22 +115,32 @@ applies within a moment — no restart needed.
 | `twohand_max_dist` | 0.75 | …or further apart than this |
 | `twohand_blend` | 1.0 | 0..1, how hard to snap to the line (1 = fully locked) |
 
-#### Two-hand-only filter profile
-While two-hand mode is active it uses its **own** filter settings, because two hands on the gun
-means much less input noise. The idea is *very steady at rest, still fast enough to track*:
+#### Virtual gunstock
+The aim line between the hands is low-passed by its **own** filter — this is what makes it feel
+like a braced stock instead of a twitchy "two hands glued to one gun":
 
 | Key | Default | Meaning |
 |---|---|---|
-| `twohand_min_cutoff` | 3.0 | position cutoff while two-handing (Hz) |
-| `twohand_beta` | 2.2 | one-euro speed term (higher = catches up sooner) |
-| `twohand_min_cutoff_rot` | 2.0 | rotation cutoff (Hz) |
-| `twohand_beta_rot` | 1.5 | rotation equivalent |
+| `stock_cutoff` | 2.5 | how fast the aim follows the line between the hands (Hz). Lower = the stock leans the aim slowly when you move the main hand. Floored at 1 Hz |
+| `stock_beta` | 2.0 | how fast the stock follows a deliberate swing |
+| `stock_zoom_mult` | 2.5 | while the trigger is held, `stock_cutoff` is divided by this (1 Hz floor) — the zoom/aim-down-sights feel in two-hand mode |
+
+#### Two-hand hand-filter override (optional)
+Two-hand mode uses the **same base/trigger profile** as everything else — the stock line has its
+own filter, so no separate hand profile is needed. These keys remain as an optional override;
+**0 = fall back to the base profile (recommended)**:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `twohand_min_cutoff` | 0 | position cutoff override while two-handing (Hz), 0 = use base |
+| `twohand_beta` | 0 | one-euro speed term override |
+| `twohand_min_cutoff_rot` | 0 | rotation cutoff override, 0 = use base |
+| `twohand_beta_rot` | 0 | rotation equivalent |
 | `catchup_pos` | 0 | extra stiffness per metre of lag, heavy profiles only (0 = off) |
 | `catchup_rot` | 0 | extra stiffness per radian of lag, heavy profiles only (0 = off) |
 
-**These two blocks never combine.** While two-hand mode is active, the two-hand block *replaces*
-the trigger/zoom block entirely — so a pistol one-handed (trigger only) keeps its own tuning, and
-two-hand mode has its own. Set `twohand_min_cutoff_rot=0` to make two-hand fall back to block 1.
+The trigger still applies while two-handing: it makes the **stock** heavier (`stock_zoom_mult`)
+and, if a non-zero override is set, the hand profile as well.
 
 ---
 

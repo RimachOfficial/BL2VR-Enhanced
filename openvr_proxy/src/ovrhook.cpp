@@ -56,6 +56,9 @@ struct Cfg {
     double minCutoff, beta, derivCutoff, minCutoffRot, betaRot, predictMs;
     int    triggerGate;          // 0 = ignore trigger, 1 = stronger while held, 2 = only while held
     double triggerThreshold, zoomMult, zoomMultRot;
+    int    zoomHand;             // which hand's trigger drives the gate: 0 = gun, 1 = offhand, 2 = either
+    // ---- virtual gunstock (two-hand mode) ----
+    double stockCutoff, stockBeta, stockZoomMult;
     // ---- two-handed grip ----
     int    twohand, twohandGate, gunHand, axisIndex, twohandButton, twohandHand;
     double twohandMinDist, twohandMaxDist, twohandBlend;
@@ -67,10 +70,12 @@ struct Cfg {
     double catchPos, catchRot;
 };
 static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
+                      2 /*zoomHand: 0=gun,1=offhand,2=either*/, 2.5, 2.0, 2.5,
                       1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
                       0 /*twohandHand: 0=offhand,1=gun hand*/,
                       0.12, 0.75, 1.0,
-                      1.5, 8.0, 1.0, 6.0 };
+                      0, 0, 0, 0,   // two-hand filter override: 0 = use the base/zoom profile
+                      0.0, 0.0 };
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
@@ -167,6 +172,19 @@ static void LoadCfg() {
     if (g_cfg.zoomMult < 1.0) g_cfg.zoomMult = 1.0;
     if (g_cfg.zoomMultRot < 0.0) g_cfg.zoomMultRot = 0.0;
 
+    // which hand's trigger drives the zoom gate ("gun" / "offhand" / "either")
+    {
+        char zh[32] = { 0 };
+        IniGet("zoom_hand", zh, sizeof(zh));
+        g_cfg.zoomHand = (zh[0] == 'o' || zh[0] == 'O') ? 1
+                       : (zh[0] == 'e' || zh[0] == 'E') ? 2 : 0;
+    }
+    // virtual gunstock: the aim line's own One Euro filter (see ApplyStock)
+    g_cfg.stockCutoff   = CfgD("stock_cutoff", 2.5);
+    g_cfg.stockBeta     = CfgD("stock_beta", 2.0);
+    g_cfg.stockZoomMult = CfgD("stock_zoom_mult", 2.5);
+    if (g_cfg.stockZoomMult < 1.0) g_cfg.stockZoomMult = 1.0;
+
     // ---- two-handed grip ----
     g_cfg.twohand     = CfgI("twohand", 1);
     g_cfg.twohandGate = CfgI("twohand_gate", 1);
@@ -214,6 +232,8 @@ static void*         g_lastSession = nullptr;
 static OneEuroVec3   g_fpos[2];
 static OneEuroQuat   g_frot[2];
 static OneEuroVec3   g_fhead;
+static OneEuroVec3   g_stockLine;            // virtual stock: the aim line's own low-pass
+static bool          g_stockWasActive = false;
 static volatile LONG g_calls = 0;
 static bool          g_dumped = false;
 
@@ -245,6 +265,7 @@ typedef int (*PFN_GetInputState)(void* session, unsigned int controllerType, voi
 static PFN_GetInputState g_getInputState = nullptr;
 static void*             g_session = nullptr;
 static volatile LONG     g_trigger1000 = 0;      // gun-hand INDEX trigger x1000
+static volatile LONG     g_trigOff1000 = 0;      // off-hand INDEX trigger x1000 (zoom_hand = offhand/either)
 static volatile LONG     g_pollRcGun = -999;     // last return code of ovr_GetInputState for the gun hand (-999 = never ran)
 static volatile LONG     g_grip1000 = 0;         // button-hand GRIP button x1000
 static volatile LONG     g_btnTrig1000 = 0;      // button-hand INDEX trigger x1000
@@ -367,11 +388,17 @@ static void PollTrigger() {
         return;
     }
 
-    // 1) the GUN hand's index trigger -> the zoom / smoothing gate
+    // 1) index triggers of BOTH hands: the zoom gate reads the gun hand (default), the
+    //    offhand, or whichever pulls harder (zoom_hand = gun / offhand / either). This keeps
+    //    the trigger bind under user control even when the game's own aim bind sits on the
+    //    other controller.
     {
-        int it = (int)(buf.f.IndexTrigger[gun] * 1000.0f);
+        int it = (int)(buf.f.IndexTrigger[gun]     * 1000.0f);
+        int io = (int)(buf.f.IndexTrigger[1 - gun] * 1000.0f);
         if (it < 0) it = 0; if (it > 1000) it = 1000;
+        if (io < 0) io = 0; if (io > 1000) io = 1000;
         g_trigger1000 = it;
+        g_trigOff1000 = io;
     }
 
     // 2) grip + index trigger of the BUTTON hand -> the two-hand gate.
@@ -404,39 +431,69 @@ static double NowDt() {
 static void ResetFilters() {
     for (int h = 0; h < 2; h++) { g_fpos[h].reset(); g_frot[h].reset(); }
     g_fhead.reset();
+    g_stockLine.reset();
+    g_stockWasActive = false;
 }
 
-// ---------------- two-handed grip solve ----------------
-// forward = normalize(offhand_pos - gunhand_pos). The gun hand's orientation gets a *delta*
-// rotation so its barrel axis lands on that line. Positions are NEVER touched, so the hands
-// stay free to slide back and forth along the grip - only the aim direction is locked.
+// ---------------- virtual gunstock ----------------
+// The aim is the line between the hands - but the line is now computed from the FILTERED
+// hand positions (after the normal One Euro hand filters) and then passes through its OWN
+// One Euro low-pass (stock_cutoff / stock_beta) before it is applied. So the hand-motion
+// smoothing is the base of everything, and the stock adds inertia on top of it: a quick
+// movement of the main hand only *leans* the aim instead of snapping it, like a real stock
+// braced against the shoulder. Pulling the trigger divides the stock cutoff by
+// stock_zoom_mult (floored at 1 Hz - never sub-1 Hz, that is the multi-second float),
+// which is the zoom/aim-down-sights feel. Positions are NEVER touched, so the hands stay
+// free to slide along the grip.
 static int    g_twoHandActive = 0;
 static int    g_bestAxis = -1;
 static double g_bestAxisDot = -2.0;
 
-static bool ApplyTwoHand(ovrTrackingState* st) {
+// engagement check only - runs on the raw tracking state, before the filters
+static bool StockActive(const ovrTrackingState* st) {
     const int gun = g_cfg.gunHand, off = 1 - gun;
-
     if (!(st->HandStatusFlags[gun] & STATUS_POSITION_TRACKED)) return false;
     if (!(st->HandStatusFlags[off] & STATUS_POSITION_TRACKED)) return false;
+    const ovrPoseStatef* pg = &st->HandPoses[gun];
+    const ovrPoseStatef* po = &st->HandPoses[off];
+    const double dx = (double)po->ThePose.Position.x - pg->ThePose.Position.x;
+    const double dy = (double)po->ThePose.Position.y - pg->ThePose.Position.y;
+    const double dz = (double)po->ThePose.Position.z - pg->ThePose.Position.z;
+    const double len = sqrt(dx*dx + dy*dy + dz*dz);
+    return len >= g_cfg.twohandMinDist && len <= g_cfg.twohandMaxDist;
+}
 
-    ovrPoseStatef* pg = &st->HandPoses[gun];
-    ovrPoseStatef* po = &st->HandPoses[off];
+// the solve - runs AFTER the hand filters, inside g_fcs
+static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld) {
+    const int gun = g_cfg.gunHand, off = 1 - gun;
+    ovrPoseStatef*       pg = &st->HandPoses[gun];
+    const ovrPoseStatef* po = &st->HandPoses[off];
 
     float d[3] = { po->ThePose.Position.x - pg->ThePose.Position.x,
                    po->ThePose.Position.y - pg->ThePose.Position.y,
                    po->ThePose.Position.z - pg->ThePose.Position.z };
     double len = sqrt((double)d[0]*d[0] + (double)d[1]*d[1] + (double)d[2]*d[2]);
-    if (len < g_cfg.twohandMinDist || len > g_cfg.twohandMaxDist) return false;
+    if (len < 1e-6) return;
+    float aim[3] = { (float)(d[0]/len), (float)(d[1]/len), (float)(d[2]/len) };
 
-    float fDes[3] = { (float)(d[0]/len), (float)(d[1]/len), (float)(d[2]/len) };
+    // the stock's own smoothing (its "weight"). The trigger makes it heavier; the 1 Hz
+    // floor keeps it out of the multi-second-float territory.
+    double sc = g_cfg.stockCutoff, sb = g_cfg.stockBeta;
+    if (gateHeld) { sc /= g_cfg.stockZoomMult; sb /= g_cfg.stockZoomMult; }
+    if (sc < 1.0) sc = 1.0;
+    if (sb < 0.0) sb = 0.0;
+    float fDes[3];
+    g_stockLine.step(aim, dt, sc, sb, g_cfg.derivCutoff, 0.0, nullptr, fDes);
+    double ol = sqrt((double)fDes[0]*fDes[0] + (double)fDes[1]*fDes[1] + (double)fDes[2]*fDes[2]);
+    if (ol < 1e-6) return;
+    fDes[0] = (float)(fDes[0]/ol); fDes[1] = (float)(fDes[1]/ol); fDes[2] = (float)(fDes[2]/ol);
+
     float qg[4] = { pg->ThePose.Orientation.x, pg->ThePose.Orientation.y,
                     pg->ThePose.Orientation.z, pg->ThePose.Orientation.w };
-
     float fCur[3];
     QuatRotateVec(qg, kAxes[g_cfg.axisIndex], fCur);
     double fl = sqrt((double)fCur[0]*fCur[0] + (double)fCur[1]*fCur[1] + (double)fCur[2]*fCur[2]);
-    if (fl < 1e-6) return false;
+    if (fl < 1e-6) return;
     fCur[0] /= (float)fl; fCur[1] /= (float)fl; fCur[2] /= (float)fl;
 
     float qd[4], qNew[4];
@@ -453,7 +510,7 @@ static bool ApplyTwoHand(ovrTrackingState* st) {
     pg->ThePose.Orientation.z = qNew[2];
     pg->ThePose.Orientation.w = qNew[3];
 
-    // diagnostic: which hand-local axis lines up best with the hand-to-hand line?
+    // diagnostic: which hand-local axis lines up best with the (smoothed) stock line?
     // (hold the gun on a target, then read the log - the best axis is the barrel)
     g_bestAxisDot = -2.0;
     for (int i = 0; i < 6; i++) {
@@ -462,7 +519,6 @@ static bool ApplyTwoHand(ovrTrackingState* st) {
         double dot = (double)v[0]*fDes[0] + (double)v[1]*fDes[1] + (double)v[2]*fDes[2];
         if (dot > g_bestAxisDot) { g_bestAxisDot = dot; g_bestAxis = i; }
     }
-    return true;
 }
 
 // ---------- the hook ----------
@@ -493,7 +549,11 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // a sniper wants when scoped in, with normal 1:1 feel the rest of the time.
     if (!g_session && session) g_session = session;   // the polling thread does the rest
 
-    const double trig     = (double)g_trigger1000 / 1000.0;
+    const double trigGun  = (double)g_trigger1000 / 1000.0;
+    const double trigOff  = (double)g_trigOff1000 / 1000.0;
+    const double trig     = (g_cfg.zoomHand == 1) ? trigOff
+                          : (g_cfg.zoomHand == 2) ? (trigGun > trigOff ? trigGun : trigOff)
+                          : trigGun;
     const double grip     = (double)g_grip1000 / 1000.0;
     const bool   trigHeld = (trig >= g_cfg.triggerThreshold);
     const bool   gripHeld = (grip >= g_cfg.triggerThreshold);
@@ -515,23 +575,25 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         const int gnow = gateHeld ? 1 : 0;
         if (g_cfg.log && gnow != s_prevGate) {
             s_prevGate = gnow;
-            Bl2Log("trigger gate -> %s  trig=%.3f (threshold %.2f)  poll_rc=%ld  gun_hand=%s  trigger_gate=%d  zoom x%.1f/%.1f",
-                   gnow ? "HELD" : "released", trig, g_cfg.triggerThreshold, (long)g_pollRcGun,
-                   g_cfg.gunHand == 0 ? "left" : "right", g_cfg.triggerGate, mult, multRot);
+            Bl2Log("trigger gate -> %s  trig=%.3f (gun %.3f / off %.3f, hand=%s, threshold %.2f)  poll_rc=%ld  gun_hand=%s  zoom x%.1f/%.1f",
+                   gnow ? "HELD" : "released", trig, trigGun, trigOff,
+                   g_cfg.zoomHand == 0 ? "gun" : g_cfg.zoomHand == 1 ? "offhand" : "either",
+                   g_cfg.triggerThreshold, (long)g_pollRcGun,
+                   g_cfg.gunHand == 0 ? "left" : "right", mult, multRot);
         }
     }
-    // ---- two-handed grip: only while its button is held, and only if both hands are tracked
-    //      and the off-hand is within a plausible distance of the gun hand ----
+    // ---- virtual gunstock: engaged by its button + hand distance. The check runs on the
+    //      RAW data here so the filter profile can react this frame; the solve itself runs
+    //      on the FILTERED hands right after the filter loop below (smoothing is the base). ----
     g_twoHandActive = 0;
     if (g_cfg.twohand && (g_cfg.twohandGate == 0 || twoHandHeld)) {
-        if (ApplyTwoHand(st)) g_twoHandActive = 1;
+        if (StockActive(st)) g_twoHandActive = 1;
     }
 
     // ---- pick the filter profile ----
-    // Two hands on the gun = far less input noise, so two-hand mode gets its own setup:
-    // a LOW cutoff (very steady while the shot is being lined up) plus a HIGH beta (wakes up
-    // immediately when the gun is deliberately rotated, so targets can still be tracked).
-    // Everything else keeps the zoom profile: cutoff AND beta both divided = uniform "slide".
+    // Smoothing is the base of everything: two-hand mode now uses the SAME base/zoom profile
+    // for the hands (the stock line has its own filter in ApplyStock). The th* keys remain
+    // as an optional hand-filter override while two-handing; 0 = fall back (recommended).
     double mc, bt, mcr, btr;
     if (g_twoHandActive && g_cfg.thMinCutoffRot > 0.0) {
         mc  = g_cfg.thMinCutoff;
@@ -588,6 +650,16 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         // not smoothing right now - drop filter history so re-engaging doesn't snap
         for (int h = 0; h < 2; h++) { g_fpos[h].reset(); g_frot[h].reset(); }
     }
+    // virtual gunstock: the aim comes from the FILTERED hands, then the line itself is
+    // low-passed once more (stock_cutoff) - a quick main-hand movement only leans the aim.
+    // Runs inside the same lock as the filters (the hook can be called from two threads).
+    if (g_twoHandActive) {
+        ApplyStock(st, dt, gateHeld);
+        g_stockWasActive = true;
+    } else if (g_stockWasActive) {
+        g_stockLine.reset();          // re-engaging the stock must not sweep across
+        g_stockWasActive = false;
+    }
     LeaveCriticalSection(&g_fcs);
     if (g_cfg.enabled && g_cfg.smoothHead) {
         if (!(st->StatusFlags & STATUS_POSITION_TRACKED)) {
@@ -623,8 +695,10 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
 
     // Two-hand status + the axis calibration hint.
     if (g_twoHandActive && (c % 120) == 0) {
-        Bl2Log("twohand: ACTIVE  gun_hand=%s  using axis %s  |  best-matching axis=%s (%.3f) <- if this is not the axis above, change aim_axis",
+        Bl2Log("twohand: ACTIVE  gun_hand=%s  using axis %s  stock=%.2f Hz%s  |  best-matching axis=%s (%.3f) <- if this is not the axis above, change aim_axis",
                g_cfg.gunHand == 0 ? "left" : "right", kAxisNames[g_cfg.axisIndex],
+               (gateHeld ? g_cfg.stockCutoff / g_cfg.stockZoomMult : g_cfg.stockCutoff),
+               gateHeld ? " (trigger: heavier stock)" : "",
                g_bestAxis >= 0 ? kAxisNames[g_bestAxis] : "?", g_bestAxisDot);
     }
 

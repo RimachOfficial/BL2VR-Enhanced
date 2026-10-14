@@ -476,3 +476,22 @@ In-game it produced **no log**, i.e. the game has not loaded our file yet — th
 - game.h: ExeDir/FindGameFolder/PatchGame/CreateShortcut (COM IShellLink). build.bat links
   shell32/ole32/advapi32 and bundles openvr_api.dll next to the exe.
 - Also fixed: CreateRenderTarget() was missing (black window); ImGui IniFilename=null.
+
+## Virtual gunstock - smoothing is the base of everything
+
+- Root cause of "trigger does nothing": while two-handing the 30 Hz two-hand profile REPLACED
+  the trigger profile (profiles never combined), and zoom_mult=100 divided cutoffs into
+  sub-1 Hz float territory; the gate also only ever watched the gun-hand trigger.
+- NEW virtual gunstock: hands are filtered FIRST (base/trigger profile), then the aim line is
+  computed from the FILTERED hands and passes through its own One Euro low-pass
+  (stock_cutoff 2.5 Hz / stock_beta 2.0). Moving the main hand now only LEANS the aim
+  like a braced stock instead of snapping it. Positions still never touched.
+- Trigger now works in BOTH modes: divides stock_cutoff by stock_zoom_mult (2.5, 1 Hz floor)
+  while two-handing, and the base profile when one-handed. New zoom_hand key (gun/offhand/
+  either, default either) keeps the trigger bind under user control; poll reads BOTH triggers.
+- Two-hand profile keys now 0 = fall back to the base/trigger profile (override optional).
+  Trigger works while two-handing again. Gate log lines now show both trigger values.
+- Panel: combos write canonical values ("0"/"1"/"2") instead of display strings (legacy
+  "1 = stronger while held" values still parse); new Virtual gunstock section + Trigger hand.
+- Deployed: rebuilt openvr_api.dll + refreshed bl2vr_grip.ini in the game Win64 (base tuning
+  19.83/0/6.97/1.60/1.5 kept; zoom_mult 20 / zoom_mult_rot 2; twohand profile zeroed).
