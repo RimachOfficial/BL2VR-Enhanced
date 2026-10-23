@@ -10,10 +10,15 @@ where "version" tracks the mod (not the game).
 - Documentation suite: THE_STORY, ARCHITECTURE, METRICS, TESTING, CHANGELOG, CONTRIBUTING,
   CODE_OF_CONDUCT, SECURITY.
 - GPL-3.0 license.
+- Panel **Profiles** page: one-click feel presets (Default / Steady / Hybrid / Responsive /
+  Sniper) with auto-detected **Custom** state; profiles write only the 19 feel keys and never
+  touch hardware setup.
 
 ### Changed
 - Repository hygiene: game files, proprietary runtime DLLs, build artifacts and logs removed
   from tracking (they were never meant to be public); strict `.gitignore` added.
+- Panel UI redesigned: custom theme, Segoe UI fonts, sidebar navigation, toggle switches,
+  sliders, per-monitor DPI awareness.
 
 ## [0.1.0] — 2026-10-13
 

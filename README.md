@@ -107,6 +107,11 @@ a quick main-hand movement only leans the aim instead of throwing it.
 `tools\imguipanel\build\bl2vr_panel.exe` is a standalone launcher/patcher (ImGui + Win32 + DX11),
 shipped with `openvr_api.dll` beside it.
 
+- **Profiles** page: one-click feel presets — **Default** (shipped values), **Steady** (heavy
+  resistance, sniping), **Hybrid** (balanced middle), **Responsive** (light, near-raw), **Sniper**
+  (normal hip, extreme weight while aiming/braced). Hand-tuned values are auto-detected and shown
+  as **Custom**. Profiles only touch feel keys — hardware setup (gun hand, buttons, axis,
+  distances) is never changed.
 - **Detect** auto-finds the game from Steam (registry + `libraryfolders.vdf`).
 - **Patch game** copies `openvr_api.dll` and writes `bl2vr_grip.ini` into `Binaries\Win64`.
 - **Create desktop shortcut** makes a `BL2VR (enhanced)` shortcut that launches the game.
@@ -142,8 +147,8 @@ applies within a moment — no restart needed.
 | `trigger_gate` | 1 | 0 = ignore trigger, 1 = stronger while held, 2 = smooth **only** while held |
 | `zoom_hand` | either | which controller's trigger drives the gate: `gun` / `offhand` / `either` (whichever pulls harder). `either` keeps the gate working even when the game's aim bind sits on the other controller |
 | `trigger_threshold` | 0.25 | how far the trigger must be pulled. Keep it low |
-| `zoom_mult` | 20 | the position cutoff is divided by this while the trigger is held |
-| `zoom_mult_rot` | 2 | rotation equivalent |
+| `zoom_mult` | 2.0 | the position cutoff is divided by this while the trigger is held |
+| `zoom_mult_rot` | 1.5 | rotation equivalent |
 
 > Both the cutoff **and** `beta` are divided, so holding the trigger makes the filter uniformly
 > heavier — a smooth "slide", not added responsiveness. Keep the results inside the **1.5–4.5 Hz**
@@ -180,10 +185,10 @@ own filter, so no separate hand profile is needed. These keys remain as an optio
 
 | Key | Default | Meaning |
 |---|---|---|
-| `twohand_min_cutoff` | 0 | position cutoff override while two-handing (Hz), 0 = use base |
-| `twohand_beta` | 0 | one-euro speed term override |
-| `twohand_min_cutoff_rot` | 0 | rotation cutoff override, 0 = use base |
-| `twohand_beta_rot` | 0 | rotation equivalent |
+| `twohand_min_cutoff` | 3.0 | position cutoff override while two-handing (Hz), 0 = use base |
+| `twohand_beta` | 2.2 | one-euro speed term override |
+| `twohand_min_cutoff_rot` | 2.0 | rotation cutoff override, 0 = use base |
+| `twohand_beta_rot` | 1.5 | rotation equivalent |
 | `catchup_pos` | 0 | extra stiffness per metre of lag, heavy profiles only (0 = off) |
 | `catchup_rot` | 0 | extra stiffness per radian of lag, heavy profiles only (0 = off) |
 

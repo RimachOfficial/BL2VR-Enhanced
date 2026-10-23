@@ -2,6 +2,7 @@
 #include "ini.h"
 #include "game.h"
 #include "theme.h"
+#include "profiles.h"
 #include "imgui.h"
 #include "imgui_internal.h"   // ImGuiWindow / GetCurrentWindow for the custom widgets
 #include <cfloat>
@@ -156,8 +157,94 @@ static void ComboKey(IniFile& ini, const char* key, const char* label, const cha
 // ---------------------------------------------------------------------------
 // Pages
 // ---------------------------------------------------------------------------
-enum class Page { Install, Smoothing, Trigger, Grip, Gunstock, About };
-static Page g_page = Page::Install;
+enum class Page { Profiles, Install, Smoothing, Trigger, Grip, Gunstock, About };
+static Page g_page = Page::Profiles;
+
+// Profile card: full-width row, name + active badge + wrapped description. Click = apply.
+static bool ProfileCard(const Profile& pr, bool active) {
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if (window->SkipItems) return false;
+
+    const float w    = ImGui::GetContentRegionAvail().x;
+    const float padX = 16.0f * g_dpi;
+    const float wrapW = w - padX * 2.0f - (active ? 70.0f * g_dpi : 0.0f);   // leave room for the ACTIVE chip
+    const ImVec2 nameSize = ImGui::CalcTextSize(pr.name);
+    const ImVec2 descSize = ImGui::CalcTextSize(pr.desc, nullptr, false, wrapW);
+    const float h = 12.0f * g_dpi + nameSize.y + 5.0f * g_dpi + descSize.y + 12.0f * g_dpi;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+
+    const bool clicked = ImGui::InvisibleButton(pr.name, ImVec2(w, h));
+    const bool hovered = ImGui::IsItemHovered();
+
+    ImDrawList* dl = window->DrawList;
+    dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h),
+                      ImGui::GetColorU32(active ? ImVec4(0.26f, 0.18f, 0.055f, 0.45f)
+                                                : ImVec4(1, 1, 1, hovered ? 0.05f : 0.025f)),
+                      8.0f * g_dpi);
+    if (active) {
+        dl->AddRectFilled(ImVec2(pos.x + 2.0f, pos.y + 10.0f * g_dpi),
+                          ImVec2(pos.x + 5.0f * g_dpi, pos.y + h - 10.0f * g_dpi),
+                          ImGui::GetColorU32(kAccent), 2.0f);
+    }
+    // name (bold); dim it a little when not active and not hovered
+    dl->AddText(g_fonts.bold, g_fonts.bold->FontSize, ImVec2(pos.x + padX, pos.y + 12.0f * g_dpi),
+                ImGui::GetColorU32(active ? kAccent : (hovered ? kText : ImVec4(0.80f, 0.81f, 0.83f, 1.0f))),
+                pr.name);
+    if (active) {
+        const char* chip = "ACTIVE";
+        const ImVec2 cs = ImGui::CalcTextSize(chip);
+        dl->AddText(g_fonts.body, ImGui::GetFontSize(),
+                    ImVec2(pos.x + w - cs.x - padX, pos.y + 14.0f * g_dpi),
+                    ImGui::GetColorU32(kAccent), chip);
+    }
+    // wrapped description under the name
+    ImGui::RenderTextWrapped(ImVec2(pos.x + padX, pos.y + 12.0f * g_dpi + nameSize.y + 5.0f * g_dpi),
+                             pr.desc, nullptr, wrapW);
+    return clicked;
+}
+
+static void PageProfiles(IniFile& ini, Patcher& p) {
+    ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("Profiles"); ImGui::PopFont();
+    ImGui::TextColored(kTextDim, "One click sets every feel value. Hardware setup (hands, buttons, axis) is never touched.");
+
+    const int active = ActiveProfile(ini);
+    ImGui::Spacing();
+
+    for (int i = 0; i < kProfileCount; i++) {
+        const bool isActive = (i == active);
+        ImGui::PushID(i);
+        if (ProfileCard(kProfiles[i], isActive)) {
+            ApplyProfile(ini, kProfiles[i]);
+            p.status = std::string("Profile applied: ") + kProfiles[i].name;
+            p.statusOk = true;
+        }
+        ImGui::PopID();
+        ImGui::Spacing();
+    }
+
+    // Custom slot: shown when hand-tuned values match no profile
+    if (active < 0) {
+        ImGui::PushID("custom");
+        ImGui::Spacing();
+        const float w = ImGui::GetContentRegionAvail().x;
+        const ImVec2 pos = ImGui::GetCursorScreenPos();
+        const float h = 12.0f * g_dpi + ImGui::GetTextLineHeight() + 5.0f * g_dpi
+                        + ImGui::CalcTextSize("Hand-tuned values on the other pages. Pick a profile above to replace them.").y
+                        + 12.0f * g_dpi;
+        ImGui::Dummy(ImVec2(w, h));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + h),
+                          ImGui::GetColorU32(ImVec4(1, 1, 1, 0.025f)), 8.0f * g_dpi);
+        dl->AddRect(pos, ImVec2(pos.x + w, pos.y + h), ImGui::GetColorU32(ImVec4(1, 1, 1, 0.10f)),
+                    8.0f * g_dpi, 0, 1.0f * g_dpi);
+        dl->AddText(g_fonts.bold, g_fonts.bold->FontSize, ImVec2(pos.x + 16.0f * g_dpi, pos.y + 12.0f * g_dpi),
+                    ImGui::GetColorU32(kTextDim), "Custom");
+        ImGui::RenderTextWrapped(ImVec2(pos.x + 16.0f * g_dpi, pos.y + 12.0f * g_dpi + ImGui::GetTextLineHeight() + 5.0f * g_dpi),
+                                 "Hand-tuned values on the other pages. Pick a profile above to replace them.",
+                                 nullptr, w - 32.0f * g_dpi);
+        ImGui::PopID();
+    }
+}
 
 static void PageInstall(IniFile& ini, Patcher& p) {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("Install"); ImGui::PopFont();
@@ -310,6 +397,7 @@ static void DrawUI(IniFile& ini, Patcher& p) {
     // nav
     ImGui::SetCursorPos(ImVec2(6.0f * g_dpi, top + pad));
     const float navW = sideW - 12.0f * g_dpi;
+    if (NavItem("Profiles", g_page == Page::Profiles, navW)) g_page = Page::Profiles;
     if (NavItem("Install",   g_page == Page::Install,   navW)) g_page = Page::Install;
     if (NavItem("Smoothing", g_page == Page::Smoothing, navW)) g_page = Page::Smoothing;
     if (NavItem("Trigger",   g_page == Page::Trigger,   navW)) g_page = Page::Trigger;
@@ -322,6 +410,7 @@ static void DrawUI(IniFile& ini, Patcher& p) {
     ImGui::SetCursorPos(ImVec2(sideW + pad, top + pad));
     ImGui::BeginChild("##content", ImVec2(wsz.x - sideW - pad * 2.0f, wsz.y - top - pad * 2.0f - 28.0f * g_dpi), false);
     switch (g_page) {
+        case Page::Profiles:  PageProfiles(ini, p); break;
         case Page::Install:   PageInstall(ini, p); break;
         case Page::Smoothing: PageSmoothing(ini); break;
         case Page::Trigger:   PageTrigger(ini); break;

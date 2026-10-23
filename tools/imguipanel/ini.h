@@ -72,10 +72,17 @@ public:
     int    GetI(const char* key, int def)    { CfgVal* v = Find(key); return v ? atoi(v->val.c_str()) : def; }
 
     // edit the value of an existing key in-place, write to disk, then re-parse so the
-    // other entries' offsets stay valid after the length change.
+    // other entries' offsets stay valid after the length change. Missing keys are appended.
     bool SetAndSave(const char* key, const std::string& val) {
         CfgVal* v = Find(key);
-        if (!v || v->val == val) return true;
+        if (!v) {
+            if (!raw.empty() && raw.back() != '\n') raw += '\n';
+            raw += std::string(key) + "=" + val + "\n";
+            bool ok = Save();
+            Parse();
+            return ok;
+        }
+        if (v->val == val) return true;
         raw.replace(v->vs, v->ve - v->vs, val);
         bool ok = Save();
         Parse();
