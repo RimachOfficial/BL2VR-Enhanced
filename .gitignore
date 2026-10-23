@@ -21,6 +21,7 @@ VirtualDesktop*.dll
 
 # --- Logs & scratch ---------------------------------------------------------
 *.log
+*.zip
 build_log.txt
 probe_build.txt
 test_build.txt

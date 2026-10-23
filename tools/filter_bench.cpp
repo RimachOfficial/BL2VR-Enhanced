@@ -1,5 +1,6 @@
-// filter_bench.cpp - offline test of the REAL filter code (src/filters.h).
-// Build:  g++ -O2 -std=c++17 filter_bench.cpp -o filter_bench   (or: cl /O2 /EHsc /std:c++17 filter_bench.cpp)
+// filter_bench.cpp - offline test of the REAL filter code (openvr_proxy/src/filters.h).
+// Build (from repo root): g++ -O2 -std=c++17 -I openvr_proxy tools/filter_bench.cpp -o filter_bench
+//   (MSVC: cl /O2 /EHsc /std:c++17 /I openvr_proxy tools\filter_bench.cpp)
 // Reports lag while moving, settle time after a stop, a 2-degree correction, and how much of an
 // 8 Hz hand tremor is left, for the OLD profiles from the INI and the NEW ones with catch-up.
 #include "src/filters.h"

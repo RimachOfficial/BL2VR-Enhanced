@@ -1,8 +1,33 @@
-# Borderlands 2 VR — Two-Handed Grip + Aim Smoothing
+# BL2VR Enhanced
 
-A DLL-proxy mod for **Borderlands 2 VR** (Steam AppID 991260, version 1.0.462.2101248).
+**Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR** — a dependency-free DLL-proxy mod that hooks the game at the runtime boundary. No game files are modified; uninstall is two clicks.
 
-Two features, driven by your controller buttons (both changeable in the ini):
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)](#install)
+[![Game](https://img.shields.io/badge/game-Borderlands%202%20VR%20(Steam%20991260)-orange)](#install)
+[![Built with](https://img.shields.io/badge/built%20with-AI%20pair%20programming-9cf)](docs/THE_STORY.md)
+
+> **The story:** a 20-year-old aim problem (one-hand-only, jittery VR guns), four planned
+> implementation routes, one wrong runtime, one 55× clock bug — and a mod that shipped.
+> Full narrative with metrics and wrong turns: **[docs/THE_STORY.md](docs/THE_STORY.md)**.
+
+---
+
+## The problem → the result
+
+| | Before | After |
+|---|---|---|
+| **Grip** | One-hand aim only | Two-handed virtual gunstock, hold `grip` to engage, hands free to slide |
+| **Aim stability** | Raw controller tremor on every shot | One Euro filtering: **3.3× smoother** rotation in-game (jitter meter) |
+| **Zoom/ADS feel** | Nothing changes when aiming | Trigger makes the stock progressively heavier (1 Hz floor) |
+| **Post-move settle** | **1.28 s** float tail after a big move | **0.08 s** (16× faster, measured in the offline bench) |
+| **Fast-move lag** | 13.9° rotation lag | **1.8°** (7.7× less, bench) |
+| **Install** | — | 2 files, no game-file edits, reversible |
+
+Every number above is reproducible: the bench harness is in this repo
+([`tools/filter_bench.cpp`](tools/filter_bench.cpp), methodology in [docs/METRICS.md](docs/METRICS.md)).
+
+## Features
 
 1. **Virtual gunstock (two-handed grip)** — while you hold the **grip button** (default) the gun
    aims along the **line between your two hands**. Your hands stay completely free to slide back
@@ -10,37 +35,39 @@ Two features, driven by your controller buttons (both changeable in the ini):
    through **its own low-pass filter**, so a quick movement of the main hand only *leans* the aim
    like a real stock braced against the shoulder — it never snaps. Move the off-hand and the gun
    rotates with it.
-2. **Rotation smoothing** — your hand poses are run through a One Euro filter, so the small
-   tremble that ruins long-range shots is removed. **Every system builds on this base**: the
-   hands are filtered first, and the stock line is derived from the *filtered* hands. It gets
-   much heavier while the **index trigger** is held — and the trigger now also makes the stock
-   heavier (that is the zoom feel), in both one-handed and two-hand mode.
+2. **Rotation smoothing** — hand poses run through a One Euro filter, so the small tremble that
+   ruins long-range shots is removed. **Every system builds on this base**: hands are filtered
+   first, and the stock line is derived from the *filtered* hands. It gets much heavier while the
+   **index trigger** is held — the trigger also makes the stock heavier (that is the zoom feel),
+   in both one-handed and two-hand modes.
 
-Works in **normal and lefty layouts** (see `gun_hand`).
+Works in **normal and lefty layouts** (see `gun_hand`). All buttons and filter values are configurable.
 
 ---
 
 ## Install
 
 1. In `...\Borderlands 2 VR\Binaries\Win64\`:
-   - copy the game's original `openvr_api.dll` to **`openvr_api_orig.dll`** (keep it — our proxy
+   - copy the game's original `openvr_api.dll` to **`openvr_api_orig.dll`** (keep it — the proxy
      forwards to that name),
-   - put **our `openvr_api.dll`** and **`bl2vr_grip.ini`** in the same folder.
+   - put the mod's **`openvr_api.dll`** and **`bl2vr_grip.ini`** in the same folder.
 2. Launch the game **through Virtual Desktop** (VD → Games).
 
+Easiest path: run **`tools\imguipanel\build\bl2vr_panel.exe`** — it finds the game in Steam,
+copies the files, and creates a desktop shortcut (see [Launcher + config panel](#launcher--config-panel-desktop)).
+
 **Uninstall:** copy `openvr_api_orig.dll` back over `openvr_api.dll` and delete `bl2vr_grip.ini`.
+(Or `openvr_proxy\install.ps1 -Restore` if you installed via script.)
 
 > **Important:** launching this game through SteamVR crashes it (a pre-existing game/runtime
 > incompatibility, reproducible with the untouched original DLL). Use Virtual Desktop.
-
----
 
 ## How it works (short version)
 
 - On this setup BL2VR does **not** run on OpenVR — it runs on **Virtual Desktop's Oculus runtime**
   (`VirtualDesktop.LibOVRRT64_1.dll`). Verified from the loaded-module list in-game.
-- The game **always** loads `openvr_api.dll` from its own folder, so that file is our way in: our
-  DLL forwards every OpenVR export to the original and hosts the payload.
+- The game **always** loads `openvr_api.dll` from its own folder, so that file is our way in: the
+  proxy DLL forwards every OpenVR export to the original and hosts the payload.
 - A worker thread waits for VD's Oculus runtime to appear, then installs a **MinHook** detour on
   **`ovr_GetTrackingState`**, the call the game uses to read controller poses.
 - Each call: both hand poses run through the filter **first**, then the virtual gunstock solve
@@ -51,6 +78,7 @@ Works in **normal and lefty layouts** (see `gun_hand`).
   raw vs filtered, so improvements are measured rather than guessed.
 
 Log file: `Binaries\Win64\openvr_proxy.log` (or `%LOCALAPPDATA%\BL2VR-grip\openvr_proxy.log`).
+Full pipeline with diagram: **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 ---
 
@@ -67,6 +95,22 @@ more by its **own** One Euro filter, and only that smoothed line drives the gun.
 delta on top of the filtered pose, the game's own per-weapon "how the gun sits in the hand" offset
 is preserved. **Positions are never modified** — the hands stay free to slide along the grip, and
 a quick main-hand movement only leans the aim instead of throwing it.
+
+---
+
+## Launcher + config panel (desktop)
+
+`tools\imguipanel\build\bl2vr_panel.exe` is a standalone launcher/patcher (ImGui + Win32 + DX11),
+shipped with `openvr_api.dll` beside it.
+
+- **Detect** auto-finds the game from Steam (registry + `libraryfolders.vdf`).
+- **Patch game** copies `openvr_api.dll` and writes `bl2vr_grip.ini` into `Binaries\Win64`.
+- **Create desktop shortcut** makes a `BL2VR (enhanced)` shortcut that launches the game.
+- Every control has a friendly name + hover description; edits are saved live (the mod
+  hot-reloads ~2 s).
+
+Build with `tools\imguipanel\build.bat` (it also bundles `openvr_api.dll` next to the exe).
+ImGui (MIT) is vendored under `tools\imguipanel\imgui\`.
 
 ---
 
@@ -171,7 +215,7 @@ filter reacts to movement **onset** immediately.
 ### Measured, not asserted — `filter_bench.cpp` (offline harness, in this repo)
 
 ```
-g++ -O2 -std=c++17 -I openvr_proxy filter_bench.cpp -o filter_bench.exe
+g++ -O2 -std=c++17 -I openvr_proxy tools/filter_bench.cpp -o filter_bench.exe
 ./filter_bench.exe
 ```
 
@@ -273,6 +317,18 @@ version / controller. There is a built-in helper:
 If `best-matching` is negative (e.g. `-0.5`), flip the sign. Take the reading **while you are
 actually aiming at something** — that is when the hand-to-hand line and the barrel agree.
 
+## Building from source
+
+| Component | Toolchain | Command |
+|---|---|---|
+| Mod DLL (`openvr_api.dll`) | MSVC 2022+ (VS 18 tested), x64 | `openvr_proxy\build.bat` |
+| Config panel (`bl2vr_panel.exe`) | MSVC, x64 | `tools\imguipanel\build.bat` |
+| Offline filter bench | any C++17 compiler (g++/MSVC) | see [docs/METRICS.md](docs/METRICS.md) |
+| Legacy Oculus proxy (`ovr_proxy`, unused) | MSVC + MASM (ml64) | `ovr_proxy\build.bat` |
+
+MinHook is vendored under `third_party\minhook-master\` (BSD-3-Clause). No package manager needed.
+Verification steps after a build: [docs/TESTING.md](docs/TESTING.md).
+
 ---
 
 ## Known limitations
@@ -282,25 +338,41 @@ actually aiming at something** — that is when the hand-to-hand line and the ba
 - The first sample after enabling has no filter history, so it starts from the raw pose.
 - Per-weapon differences (how a gun sits in the hand) may want a different `aim_axis` or a
   lower `twohand_blend`.
-- Built with AI assistance.
+- Built with AI assistance (see [THE_STORY](docs/THE_STORY.md)).
 
-## Launcher + config panel (desktop)
+---
 
-`tools\imguipanel\build\bl2vr_panel.exe` is a standalone launcher/patcher (ImGui + Win32 + DX11),
-shipped with `openvr_api.dll` beside it.
+## Documentation
 
-- **Detect** auto-finds the game from Steam (registry + `libraryfolders.vdf`).
-- **Patch game** copies `openvr_api.dll` and writes `bl2vr_grip.ini` into `Binaries\Win64\`.
-- **Create desktop shortcut** makes a `BL2VR (enhanced)` shortcut that launches the game.
-- Every control has a friendly name + hover description; edits are saved live (the mod
-  hot-reloads ~2 s).
+| Document | What it is |
+|---|---|
+| [docs/THE_STORY.md](docs/THE_STORY.md) | The full problem → action → result narrative (the YouTube story) |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | How the proxy + hook pipeline works, with diagrams |
+| [docs/METRICS.md](docs/METRICS.md) | Every measurement, methodology and raw log evidence |
+| [docs/DEVLOG.md](docs/DEVLOG.md) | The raw session-by-session development log |
+| [docs/PLAN.md](docs/PLAN.md) | Original implementation plan + field record |
+| [docs/TESTING.md](docs/TESTING.md) | How to verify a build works |
+| [CHANGELOG.md](CHANGELOG.md) | Release history |
 
-Build with `tools\imguipanel\build.bat` (it also bundles `openvr_api.dll` next to the exe).
-ImGui (MIT) is vendored under `tools\imguipanel\imgui\`.
+---
 
 ## Credits / prior art
 
-Implemented at the Oculus runtime boundary using [MinHook](https://github.com/TsudaKageyu/minhook).
-Same class of tool as OpenVR-InputEmulator / gun-stock "motion compensation", but placed at the app
-boundary so it does not fight the runtime. I could not find an existing two-handed-grip mod for
-this game — that is "I couldn't find one", not a claim to be the first.
+- Filtering: **One Euro filter** — Casiez, Roussel & Vogel, CHI 2012.
+- Hooking: [MinHook](https://github.com/TsudaKageyu/minhook) (BSD-3-Clause), vendored.
+- UI: [Dear ImGui](https://github.com/ocornut/imgui) (MIT), vendored.
+- Same class of tool as OpenVR-InputEmulator / gun-stock "motion compensation", but placed at the
+  app boundary so it does not fight the runtime. I could not find an existing two-handed-grip mod
+  for this game — that is "I couldn't find one", not a claim to be the first.
+
+## Legal
+
+- GPL-3.0 — free to use, share and improve; derivative mods must stay open source ([LICENSE](LICENSE)).
+- This is a fan project, not affiliated with or endorsed by Gearbox Software, 2K, or Meta.
+- **No game files, Valve/Meta/Facebook binaries or decompiled code are distributed in this
+  repository.** You must own Borderlands 2 VR; the mod only adds two files next to the game exe.
+
+
+
+
+
