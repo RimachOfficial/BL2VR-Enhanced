@@ -106,31 +106,38 @@ static void Desc(const char* d) { if (d && ImGui::IsItemHovered()) ImGui::SetToo
 
 static void FloatKey(IniFile& ini, const char* key, const char* label, const char* d,
                      float vmin, float vmax, const char* fmt = "%.2f") {
+    ImGui::PushID(key);                     // unique scope: several sliders share the "##v" label
     float f = (float)ini.GetD(key, 0.0);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::SliderFloat("##kf", &f, vmin, vmax, fmt)) {
+    if (ImGui::SliderFloat("##v", &f, vmin, vmax, fmt)) {
         char b[64]; snprintf(b, sizeof(b), fmt, f); ini.SetAndSave(key, b);
     }
     Desc(d);
+    ImGui::PopID();
 }
 static void IntKey(IniFile& ini, const char* key, const char* label, const char* d, int vmin, int vmax) {
+    ImGui::PushID(key);
     int v = ini.GetI(key, 0);
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::SliderInt("##ki", &v, vmin, vmax)) { char b[32]; snprintf(b, sizeof(b), "%d", v); ini.SetAndSave(key, b); }
+    if (ImGui::SliderInt("##v", &v, vmin, vmax)) { char b[32]; snprintf(b, sizeof(b), "%d", v); ini.SetAndSave(key, b); }
     Desc(d);
+    ImGui::PopID();
 }
 static void BoolKey(IniFile& ini, const char* key, const char* label, const char* d) {
+    ImGui::PushID(key);
     bool b = ini.GetI(key, 0) != 0;
     if (ToggleRow(label, &b, d)) ini.SetAndSave(key, b ? "1" : "0");
+    ImGui::PopID();
 }
 static void ComboKey(IniFile& ini, const char* key, const char* label, const char* d,
                      const char* const* opts, const char* const* vals, int n) {
+    ImGui::PushID(key);
     std::string cur = ini.Get(key, vals[0]);
     int idx = 0;
     for (int i = 0; i < n; i++) {
@@ -141,8 +148,9 @@ static void ComboKey(IniFile& ini, const char* key, const char* label, const cha
     ImGui::TextUnformatted(label);
     ImGui::SameLine();
     ImGui::SetNextItemWidth(-FLT_MIN);
-    if (ImGui::Combo("##kc", &idx, opts, n)) ini.SetAndSave(key, vals[idx]);
+    if (ImGui::Combo("##v", &idx, opts, n)) ini.SetAndSave(key, vals[idx]);
     Desc(d);
+    ImGui::PopID();
 }
 
 // ---------------------------------------------------------------------------
