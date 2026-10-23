@@ -28,6 +28,14 @@ test_build.txt
 testhost_log*.txt
 myConfig.txt
 
-# --- OS ---------------------------------------------------------------------
+# --- OS / Visual Studio -----------------------------------------------------
 Thumbs.db
 .DS_Store
+.vs/
+*.user
+*.aps
+*.ipch
+x64/
+Debug/
+Release/
+dist/

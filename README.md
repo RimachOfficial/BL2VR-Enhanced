@@ -2,6 +2,7 @@
 
 **Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR** — a dependency-free DLL-proxy mod that hooks the game at the runtime boundary. No game files are modified; uninstall is two clicks.
 
+[![Build](https://github.com/RimachOfficial/BL2VR-Enhanced/actions/workflows/build.yml/badge.svg)](https://github.com/RimachOfficial/BL2VR-Enhanced/actions/workflows/build.yml)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)](#install)
 [![Game](https://img.shields.io/badge/game-Borderlands%202%20VR%20(Steam%20991260)-orange)](#install)
@@ -48,17 +49,23 @@ Works in **normal and lefty layouts** (see `gun_hand`). All buttons and filter v
 
 ## Install
 
+**Easiest:** download the latest **[Release](https://github.com/RimachOfficial/BL2VR-Enhanced/releases)**
+(`openvr_api.dll` + `bl2vr_grip.ini` + `bl2vr_panel.exe`), and run `bl2vr_panel.exe` —
+it finds the game in Steam, patches it, and offers Launch / Remove buttons.
+
+**Manual:**
+
 1. In `...\Borderlands 2 VR\Binaries\Win64\`:
    - copy the game's original `openvr_api.dll` to **`openvr_api_orig.dll`** (keep it — the proxy
      forwards to that name),
    - put the mod's **`openvr_api.dll`** and **`bl2vr_grip.ini`** in the same folder.
 2. Launch the game **through Virtual Desktop** (VD → Games).
 
-Easiest path: run **`tools\imguipanel\build\bl2vr_panel.exe`** — it finds the game in Steam,
-copies the files, and creates a desktop shortcut (see [Launcher + config panel](#launcher--config-panel-desktop)).
+Easiest path is the panel above (see [Launcher + config panel](#launcher--config-panel-desktop)).
 
-**Uninstall:** copy `openvr_api_orig.dll` back over `openvr_api.dll` and delete `bl2vr_grip.ini`.
-(Or `openvr_proxy\install.ps1 -Restore` if you installed via script.)
+**Uninstall:** `bl2vr_panel.exe` → **Remove mod** (restores the original DLL and deletes the
+mod files). Manually: copy `openvr_api_orig.dll` back over `openvr_api.dll` and delete
+`bl2vr_grip.ini`. (Or `openvr_proxy\install.ps1 -Restore` if you installed via script.)
 
 > **Runtime note:** on the setup this mod was built and tested on (Virtual Desktop + standalone
 > headset), the game runs through the **Oculus (LibOVR) runtime** — the PC port's VR layer comes
@@ -113,7 +120,9 @@ shipped with `openvr_api.dll` beside it.
   as **Custom**. Profiles only touch feel keys — hardware setup (gun hand, buttons, axis,
   distances) is never changed.
 - **Detect** auto-finds the game from Steam (registry + `libraryfolders.vdf`).
-- **Patch game** copies `openvr_api.dll` and writes `bl2vr_grip.ini` into `Binaries\Win64`.
+- **Patch game** backs up the original `openvr_api.dll` (first patch only) and installs the
+  mod DLL + `bl2vr_grip.ini` into `Binaries\Win64`.
+- **Remove mod** restores the stock game; **Launch game** starts the exe.
 - **Create desktop shortcut** makes a `BL2VR (enhanced)` shortcut that launches the game.
 - Every control has a friendly name + hover description; edits are saved live (the mod
   hot-reloads ~2 s).

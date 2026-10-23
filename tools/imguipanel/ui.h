@@ -246,6 +246,10 @@ static void PageProfiles(IniFile& ini, Patcher& p) {
     }
 }
 
+static std::string IniPathFor(const Patcher& p) {
+    return p.found ? p.gameWin64 + "bl2vr_grip.ini" : "bl2vr_grip.ini";
+}
+
 static void PageInstall(IniFile& ini, Patcher& p) {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("Install"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Find the game, patch it, done. The mod never edits game files.");
@@ -267,17 +271,27 @@ static void PageInstall(IniFile& ini, Patcher& p) {
         p.gameExe = p.found ? p.gameWin64 + "Borderlands2VR.exe" : "";
         p.status = p.found ? "Found: " + p.gameWin64 : "Not found - set the path above.";
         p.statusOk = p.found;
+        ini.Load(IniPathFor(p));   // start editing the real ini where it lives
     }
 
     SectionHeader("Mod");
     if (PrimaryButton("Patch game (install mod)")) {
         PatchResult r = PatchGame(p.gameWin64, p.dllSrc, ini.raw); p.status = r.msg; p.statusOk = r.ok;
+        ini.Load(IniPathFor(p));
     }
     ImGui::SameLine();
+    if (ImGui::Button("Remove mod (restore)")) {
+        PatchResult r = RestoreGame(p.gameWin64); p.status = r.msg; p.statusOk = r.ok;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Launch game")) {
+        PatchResult r = LaunchGame(p.gameWin64); p.status = r.msg; p.statusOk = r.ok;
+    }
+    Desc("Patch backs up the original DLL automatically. Remove puts the game fully back to stock. Launch runs the exe (use with Virtual Desktop).");
     if (ImGui::Button("Create desktop shortcut")) {
         PatchResult r = CreateShortcut(p.gameWin64); p.status = r.msg; p.statusOk = r.ok;
     }
-    Desc("Shortcut launches Borderlands2VR.exe directly - pair it with Virtual Desktop.");
+    Desc("Makes a 'BL2VR (enhanced)' shortcut that launches the game directly.");
 
     SectionHeader("Diagnostics");
     BoolKey(ini, "log", "Logging", "Write diagnostics to openvr_proxy.log next to the game.");
@@ -365,12 +379,13 @@ static void PageAbout() {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("About"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR.");
     SectionHeader("Mod");
-    ImGui::BulletText("Version 0.1.0");
+    ImGui::BulletText("Version 0.1.1");
     ImGui::BulletText("GPL-3.0 - free to use, share and improve");
-    ImGui::BulletText("No game files are modified; uninstall = delete 2 files");
+    ImGui::BulletText("No game files are modified; Remove restores the stock game");
     ImGui::BulletText("Launch through Virtual Desktop (Oculus runtime path)");
     SectionHeader("Source");
     ImGui::BulletText("github.com/RimachOfficial/BL2VR-Enhanced");
+    ImGui::BulletText("Downloads: github.com/RimachOfficial/BL2VR-Enhanced/releases");
     SectionHeader("Credits");
     ImGui::BulletText("One Euro filter - Casiez, Roussel & Vogel (CHI 2012)");
     ImGui::BulletText("MinHook (BSD-3-Clause) - Tsuda Kageyu");

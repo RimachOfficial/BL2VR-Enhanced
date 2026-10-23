@@ -75,7 +75,19 @@ static PatchResult PatchGame(const std::string& win64, const std::string& dllSrc
     if (win64.empty()) { r.msg = "Game folder not found - click Detect."; return r; }
     if (!FileExists(win64 + "Borderlands2VR.exe")) { r.msg = "Borderlands2VR.exe not found in " + win64; return r; }
     if (!FileExists(dllSrc)) { r.msg = "openvr_api.dll not found next to this tool: " + dllSrc; return r; }
-    if (!CopyFileA(dllSrc.c_str(), (win64 + "openvr_api.dll").c_str(), FALSE)) {
+
+    // FIRST patch on a clean game: preserve the original loader as openvr_api_orig.dll
+    // (our proxy forwards to that name). Without this the proxy has nothing to forward to.
+    const std::string dll  = win64 + "openvr_api.dll";
+    const std::string orig = win64 + "openvr_api_orig.dll";
+    if (!FileExists(orig) && FileExists(dll)) {
+        if (!CopyFileA(dll.c_str(), orig.c_str(), FALSE)) {
+            r.msg = "Could not back up the original openvr_api.dll (is the game running?).";
+            return r;
+        }
+    }
+
+    if (!CopyFileA(dllSrc.c_str(), dll.c_str(), FALSE)) {
         r.msg = "Could not write openvr_api.dll (is the game running? close it first).";
         return r;
     }
@@ -84,7 +96,37 @@ static PatchResult PatchGame(const std::string& win64, const std::string& dllSrc
     o.write(iniText.data(), (std::streamsize)iniText.size());
     o.close();
     r.ok = true;
-    r.msg = "Patched: openvr_api.dll + bl2vr_grip.ini written.";
+    r.msg = "Patched: original backed up as openvr_api_orig.dll, mod installed.";
+    return r;
+}
+
+// full uninstall: original loader back in place, mod files removed
+static PatchResult RestoreGame(const std::string& win64) {
+    PatchResult r;
+    if (win64.empty() || !FileExists(win64 + "openvr_api_orig.dll")) {
+        r.msg = "No backup (openvr_api_orig.dll) found - was the mod installed here?";
+        return r;
+    }
+    if (!CopyFileA((win64 + "openvr_api_orig.dll").c_str(), (win64 + "openvr_api.dll").c_str(), FALSE)) {
+        r.msg = "Could not restore openvr_api.dll (is the game running? close it first).";
+        return r;
+    }
+    DeleteFileA((win64 + "openvr_api_orig.dll").c_str());
+    DeleteFileA((win64 + "bl2vr_grip.ini").c_str());
+    r.ok = true;
+    r.msg = "Mod removed - the game is fully back to stock.";
+    return r;
+}
+
+// launches the game exe directly (same as the desktop shortcut; pair with Virtual Desktop)
+static PatchResult LaunchGame(const std::string& win64) {
+    PatchResult r;
+    const std::string exe = win64 + "Borderlands2VR.exe";
+    if (!FileExists(exe)) { r.msg = "Borderlands2VR.exe not found."; return r; }
+    HINSTANCE h = ShellExecuteA(nullptr, "open", exe.c_str(), nullptr, win64.c_str(), SW_SHOWNORMAL);
+    if ((INT_PTR)h <= 32) { r.msg = "Could not launch Borderlands2VR.exe."; return r; }
+    r.ok = true;
+    r.msg = "Launched Borderlands 2 VR - use it with Virtual Desktop connected.";
     return r;
 }
 

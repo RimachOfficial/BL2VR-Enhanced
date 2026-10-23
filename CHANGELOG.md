@@ -6,19 +6,36 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-10-23
+
 ### Added
-- Documentation suite: THE_STORY, ARCHITECTURE, METRICS, TESTING, CHANGELOG, CONTRIBUTING,
-  CODE_OF_CONDUCT, SECURITY.
-- GPL-3.0 license.
 - Panel **Profiles** page: one-click feel presets (Default / Steady / Hybrid / Responsive /
   Sniper) with auto-detected **Custom** state; profiles write only the 19 feel keys and never
   touch hardware setup.
+- Panel **Remove mod** (full uninstall: original DLL restored, mod files deleted) and
+  **Launch game** buttons.
+- GitHub Actions CI: builds the mod DLL + panel on every push, uploads the release files as
+  artifacts; portable `build.bat` (locates MSVC via `vswhere`, no hardcoded VS path).
+- Issue/PR templates, `.editorconfig`.
+
+### Fixed
+- **Panel patcher bug**: "Patch game" did not back up the original `openvr_api.dll` as
+  `openvr_api_orig.dll` — on a clean game the proxy had nothing to forward to. The backup is
+  now automatic (first patch only).
+- Panel: widget ID conflicts (every slider/combo now scoped with `PushID(key)`).
+- Panel: footer status text could overlap the hot-reload hint — status is now
+  ellipsis-truncated to the available width, hint hides on very narrow windows.
+- Panel: the ini is re-loaded after Detect/Patch, so the editor always edits the real file.
+- README config table had stale defaults (`zoom_mult 20` vs shipped 2.0; twohand override
+  0 vs shipped 3.0/2.2/2.0/1.5) — corrected to the shipped ini.
 
 ### Changed
-- Repository hygiene: game files, proprietary runtime DLLs, build artifacts and logs removed
-  from tracking (they were never meant to be public); strict `.gitignore` added.
 - Panel UI redesigned: custom theme, Segoe UI fonts, sidebar navigation, toggle switches,
   sliders, per-monitor DPI awareness.
+- Documentation suite: THE_STORY, ARCHITECTURE, METRICS, TESTING, CHANGELOG, CONTRIBUTING,
+  CODE_OF_CONDUCT, SECURITY; GPL-3.0 license.
+- Repository hygiene: game files, proprietary runtime DLLs, build artifacts and logs removed
+  from tracking; strict `.gitignore`.
 
 ## [0.1.0] — 2026-10-13
 

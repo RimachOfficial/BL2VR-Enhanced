@@ -1,0 +1,34 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build mod DLL (openvr_api.dll proxy)
+        run: openvr_proxy\build.bat
+
+      - name: Build launcher/panel (bl2vr_panel.exe)
+        run: tools\imguipanel\build.bat
+
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item openvr_proxy\build\openvr_api.dll dist\
+          Copy-Item openvr_proxy\bl2vr_grip.ini  dist\
+          Copy-Item tools\imguipanel\build\bl2vr_panel.exe dist\
+          Get-ChildItem dist
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bl2vr-enhanced-win64
+          path: dist/
