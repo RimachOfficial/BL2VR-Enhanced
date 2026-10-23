@@ -1,0 +1,32 @@
+# --- Game & runtime files (never commit) -----------------------------------
+# Game data, Valve/Oculus/Virtual Desktop binaries. This repo ships source only.
+*.upk
+*.ucas
+openvr_api_orig.dll
+openvr_api.dll.bak
+LibOVRRT*.dll
+VirtualDesktop*.dll
+/backup/
+/mod571_new/
+
+# --- Build outputs ----------------------------------------------------------
+/openvr_proxy/build/
+/ovr_proxy/build/
+/tools/imguipanel/build/
+*.obj
+*.lib
+*.exp
+*.pdb
+*.exe
+
+# --- Logs & scratch ---------------------------------------------------------
+*.log
+build_log.txt
+probe_build.txt
+test_build.txt
+testhost_log*.txt
+myConfig.txt
+
+# --- OS ---------------------------------------------------------------------
+Thumbs.db
+.DS_Store
