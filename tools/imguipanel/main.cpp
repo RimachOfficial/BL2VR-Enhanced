@@ -88,14 +88,19 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
         if (rr) return HTRIGHT;
         if (t)  return HTTOP;
         if (bb) return HTBOTTOM;
-        // title strip drag (leave the top-right X button clickable)
-        if (pt.y >= r.top && pt.y < r.top + 26 && pt.x < r.right - 44) return HTCAPTION;
+        // title strip drag (leave the top-right X button clickable); 46px strip at any DPI
+        const UINT dpi = GetDpiForWindow(hWnd);
+        const int titleH = MulDiv(46, dpi, 96);
+        const int closeW = MulDiv(52, dpi, 96);
+        if (pt.y >= r.top && pt.y < r.top + titleH && pt.x < r.right - closeW) return HTCAPTION;
         break;
     }
     case WM_GETMINMAXINFO: {
         MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-        mmi->ptMinTrackSize.x = 360;
-        mmi->ptMinTrackSize.y = 420;
+        const UINT dpi0 = GetDpiForWindow(hWnd);
+        const UINT dpi = dpi0 ? dpi0 : 96;
+        mmi->ptMinTrackSize.x = MulDiv(430, dpi, 96);
+        mmi->ptMinTrackSize.y = MulDiv(560, dpi, 96);
         return 0;
     }
     case WM_SYSCOMMAND:
@@ -109,19 +114,28 @@ static LRESULT WINAPI WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 }
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
+    // per-monitor v2 DPI awareness before the window exists, so sizes are right from frame 1
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     WNDCLASSEXW wc = { sizeof(wc), CS_CLASSDC, WndProc, 0, 0, hInstance, nullptr, nullptr, nullptr, nullptr,
                        L"BL2VRGripPanel", nullptr };
     RegisterClassExW(&wc);
+    const UINT sysDpi = GetDpiForSystem();
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"BL2VR Grip",
-                              WS_POPUP | WS_THICKFRAME, 100, 80, 480, 740, nullptr, nullptr, wc.hInstance, nullptr);
+                              WS_POPUP | WS_THICKFRAME, 100, 80,
+                              MulDiv(560, sysDpi, 96), MulDiv(760, sysDpi, 96),
+                              nullptr, nullptr, wc.hInstance, nullptr);
     if (!CreateDeviceD3D(hwnd)) { CleanupDeviceD3D(); UnregisterClassW(wc.lpszClassName, wc.hInstance); return 1; }
     ShowWindow(hwnd, SW_SHOWDEFAULT);
     UpdateWindow(hwnd);
 
+    g_dpi = GetDpiForWindow(hwnd) / 96.0f;
+
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGui::GetIO().IniFilename = nullptr;   // no imgui.ini on disk
-    ImGui::StyleColorsDark();
+    ApplyTheme(g_dpi);
+    LoadFonts(ImGui::GetIO(), g_dpi);
     ImGui_ImplWin32_Init(hwnd);
     ImGui_ImplDX11_Init(g_pd3dDevice, g_pd3dDeviceContext);
 
@@ -156,21 +170,52 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int) {
         ImGui::Begin("BL2VR Grip", nullptr,
             ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
             ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus);
+        const ImVec2 wpos0 = ImGui::GetWindowPos();
 
         if (ImGui::IsKeyPressed(ImGuiKey_Escape)) done = true;
 
-        // title strip: drag region (native via WM_NCHITTEST) + close button
-        ImGui::TextUnformatted("BL2VR Grip - Launcher");
-        float xw = ImGui::CalcTextSize(" X ").x + 16.0f;
-        ImGui::SameLine(ImGui::GetWindowWidth() - xw - 8.0f);
-        if (ImGui::Button("X")) done = true;
-        ImGui::Separator();
+        // title strip: drag region (native via WM_NCHITTEST) + custom close button
+        const float topH = 46.0f * g_dpi;
+        ImGui::SetCursorPos(ImVec2(14.0f * g_dpi, 8.0f * g_dpi));
+        ImGui::PushFont(g_fonts.title);
+        ImGui::TextColored(kText, "BL2VR");
+        ImGui::PopFont();
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(14.0f * g_dpi);
+        ImGui::TextColored(kAccent, "Enhanced");
+        ImGui::SameLine();
+        ImGui::SetCursorPosY(17.0f * g_dpi);
+        ImGui::TextColored(kTextDim, "grip + aim smoothing");
+
+        // close button: drawn as a small square that turns red on hover
+        {
+            const ImVec2 cpos(ImGui::GetWindowWidth() - topH + 4.0f * g_dpi, 8.0f * g_dpi);
+            ImGui::SetCursorScreenPos(cpos);
+            const float sz = topH - 16.0f * g_dpi;
+            ImGui::PushID("##close");
+            ImGui::InvisibleButton("##x", ImVec2(sz, sz));
+            const bool hov = ImGui::IsItemHovered();
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            const ImVec2 p0 = ImGui::GetItemRectMin(), p1 = ImGui::GetItemRectMax();
+            if (hov) dl->AddRectFilled(p0, p1, ImGui::GetColorU32(kErr), 6.0f * g_dpi);
+            const ImU32 xc = ImGui::GetColorU32(hov ? ImVec4(1, 1, 1, 1) : kTextDim);
+            const float cx = (p0.x + p1.x) * 0.5f, cy = (p0.y + p1.y) * 0.5f, r = sz * 0.22f;
+            dl->AddLine(ImVec2(cx - r, cy - r), ImVec2(cx + r, cy + r), xc, 1.6f * g_dpi);
+            dl->AddLine(ImVec2(cx + r, cy - r), ImVec2(cx - r, cy + r), xc, 1.6f * g_dpi);
+            if (ImGui::IsItemClicked()) done = true;
+            ImGui::PopID();
+        }
+        // strip divider under the title (sidebar bg already covers the left part)
+        ImGui::GetWindowDrawList()->AddLine(
+            ImVec2(170.0f * g_dpi, wpos0.y + topH), ImVec2(wpos0.x + ImGui::GetWindowWidth(), wpos0.y + topH),
+            ImGui::GetColorU32(ImVec4(1, 1, 1, 0.06f)));
+        ImGui::SetCursorPosY(topH);
 
         DrawUI(ini, p);
         ImGui::End();
         ImGui::Render();
 
-        const float clear[4] = { 0.06f, 0.06f, 0.07f, 1.0f };
+        const float clear[4] = { 0.086f, 0.090f, 0.102f, 1.0f };   // matches kWindowBgC
         g_pd3dDeviceContext->OMSetRenderTargets(1, &g_mainRenderTargetView, nullptr);
         g_pd3dDeviceContext->ClearRenderTargetView(g_mainRenderTargetView, clear);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());

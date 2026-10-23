@@ -1,5 +1,7 @@
 @echo off
 setlocal
+rem vcvars needs vswhere from the VS installer folder; add it for shells that don't have it
+set "PATH=%PATH%;%ProgramFiles(x86)%\Microsoft Visual Studio\Installer"
 call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" || exit /b 1
 cd /d "%~dp0"
 if not exist build mkdir build

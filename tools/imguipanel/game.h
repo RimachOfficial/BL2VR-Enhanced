@@ -12,6 +12,7 @@ struct Patcher {
     std::string gameExe;     // ...\Borderlands2VR.exe
     std::string dllSrc;      // bundled openvr_api.dll (next to this tool)
     std::string status;      // last detect/patch/shortcut message
+    bool statusOk = true;    // status color: green (ok) / red (error)
     bool found = false;
 };
 
