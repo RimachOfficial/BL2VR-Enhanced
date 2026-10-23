@@ -47,7 +47,18 @@ Design rules that fell out of testing (see [README](../README.md#how-the-smoothi
 - **No thresholds anywhere** — a speed/error "bubble" toggled several times a second while
   tracking a moving target; every toggle was a lurch. Always-on interpolation only.
 - **`dt` from QPC deltas telescoping** — the game polls in bursts from multiple threads; per-call
-  deltas average out correctly over a second (details in README).
+  deltas average out correctly over a second (details in the [tuning doc](TUNING.md)).
+
+## Open technical question: one filter, several prediction timelines
+
+`ovr_GetTrackingState(session, absTime, ...)` returns poses **predicted to `absTime`**. The game
+calls it from more than one thread, and different callers may pass different `absTime` values —
+so consecutive samples fed into the single filter state can come from *different prediction
+timelines*, not just tiny steps on one clock (the telescoping argument covers only the clock).
+The periodic log line prints `t=` (the `absTime` each call asked for) so this can be checked
+against real data. If the jitter meter ever shows odd behavior, the candidate fix is to key the
+filter state per calling thread (TLS), or to only filter the main game-thread call and pass the
+rest through raw. Not implemented yet — no observed symptom on the tested setup.
 
 ## Layout validation
 
@@ -65,7 +76,7 @@ memory dump of live tracking data on real hardware. Nothing was guessed.
 | `openvr_proxy/install.ps1` | Install/restore with backup |
 | `tools/imguipanel/` | Desktop launcher/patcher + live config editor (ImGui) |
 | `tools/filter_bench.cpp` | Offline numerical harness — runs the *real* `filters.h` on synthetic motions |
-| `ovr_proxy/` | Abandoned standalone `LibOVRRT64_1.dll` proxy (128 MASM jump stubs). Kept as reference; the game would not load it, so the payload moved into the openvr carrier |
+| `tools/ovr_proxy_legacy/` | Abandoned standalone `LibOVRRT64_1.dll` proxy (128 MASM jump stubs). Kept as reference; the game would not load it, so the payload moved into the openvr carrier |
 | `research/` | Raw export lists discovered during recon |
 
 ## Why not the other routes?

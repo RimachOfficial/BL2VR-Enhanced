@@ -706,8 +706,8 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         }
     }
     if (cfg.log && (c <= cfg.logFrames || (c % 120) == 0)) {
-        Bl2Log("#%ld dt=%.4f flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
-            c, dt, st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
+        Bl2Log("#%ld dt=%.4f t=%.4f flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
+            c, dt, absTime, st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
             trig, grip, mult, multRot, (int)doSmooth, g_twoHandActive,
             st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z,
             st->HandPoses[0].ThePose.Position.x, st->HandPoses[0].ThePose.Position.y, st->HandPoses[0].ThePose.Position.z,

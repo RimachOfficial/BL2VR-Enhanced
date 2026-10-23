@@ -6,6 +6,23 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+### Changed
+- README restructured after external review: the results table now states the tremor/lag tradeoff
+  openly (current tuning keeps ~10% of tremor vs the old ~5%, in exchange for 7.7× less lag),
+  a **Compatibility** section declares exactly what is tested (one setup) and what is not
+  (Link/Rift, SteamVR) plus the expected antivirus/SmartScreen warnings for the unsigned DLL/exe,
+  and the deep filter/tuning content moved to `docs/TUNING.md`.
+- `ovr_proxy/` (abandoned first attempt) moved to `tools/ovr_proxy_legacy/` to declutter the root.
+
+### Added
+- `docs/TUNING.md` — filter maths, bench numbers with the tradeoff column, tuning rules, and the
+  dt post-mortem (previously in the README).
+- The periodic log line now prints `t=` (the `absTime` each `ovr_GetTrackingState` call asked
+  for) — first step in investigating whether different game threads request different prediction
+  horizons (one shared filter state would then be mixing timelines). Hypothesis documented in
+  `docs/ARCHITECTURE.md`.
+- Release assets now carry SHA-256 hashes in the release notes.
+
 ## [0.1.2] — 2026-10-23
 
 ### Fixed

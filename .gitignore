@@ -11,7 +11,7 @@ VirtualDesktop*.dll
 
 # --- Build outputs ----------------------------------------------------------
 /openvr_proxy/build/
-/ovr_proxy/build/
+/tools/ovr_proxy_legacy/build/
 /tools/imguipanel/build/
 *.obj
 *.lib
