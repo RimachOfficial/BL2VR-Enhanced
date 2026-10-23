@@ -420,21 +420,41 @@ static void DrawUI(IniFile& ini, Patcher& p) {
     }
     ImGui::EndChild();
 
-    // footer status bar
+    // footer status bar: status left, hint right; truncate status (with ellipsis) so
+    // the two can never collide, and hide the hint entirely on very narrow windows
     const float footY = wpos.y + wsz.y - 22.0f * g_dpi;
     dl->AddLine(ImVec2(wpos.x + sideW, footY - 6.0f * g_dpi), ImVec2(wpos.x + wsz.x, footY - 6.0f * g_dpi),
                 ImGui::GetColorU32(ImVec4(1, 1, 1, 0.06f)));
+    const char* hint = "config saves instantly - the mod hot-reloads (~2 s)";
+    const ImVec2 hts = ImGui::CalcTextSize(hint);
+    const float hintX = wpos.x + wsz.x - pad - hts.x;
+    const float gap   = 16.0f * g_dpi;
+    const float statusX = wpos.x + sideW + pad + 14.0f * g_dpi;
+    // the hint is right-aligned, so it fits by itself unless the window is tiny; hide it
+    // when it would leave no breathing room in the content area
+    const bool drawHint = (hintX - (wpos.x + sideW + pad)) > gap;
+
     const bool hasStatus = !p.status.empty();
     dl->AddCircleFilled(ImVec2(wpos.x + sideW + pad + 4.0f * g_dpi, footY + 8.0f * g_dpi), 4.0f * g_dpi,
                         ImGui::GetColorU32(hasStatus ? (p.statusOk ? kOk : kErr) : kTextDim));
     if (hasStatus) {
-        dl->AddText(g_fonts.body, ImGui::GetFontSize(), ImVec2(wpos.x + sideW + pad + 14.0f * g_dpi, footY),
-                    ImGui::GetColorU32(p.statusOk ? kText : kTextDim), p.status.c_str());
+        const float maxW = drawHint ? (hintX - gap - statusX)
+                                    : (wpos.x + wsz.x - pad - statusX);
+        // ellipsis-truncate to fit: shrink until the string (plus "...") is within maxW
+        std::string s = p.status;
+        if (maxW > 0) {
+            while (!s.empty() && ImGui::CalcTextSize((s + "...").c_str()).x > maxW) s.pop_back();
+            if (!s.empty() && s.size() < p.status.size()) s += "...";
+        } else {
+            s.clear();
+        }
+        dl->AddText(g_fonts.body, ImGui::GetFontSize(), ImVec2(statusX, footY),
+                    ImGui::GetColorU32(p.statusOk ? kText : kTextDim), s.c_str());
     }
-    const char* hint = "config saves instantly - the mod hot-reloads (~2 s)";
-    const ImVec2 hts = ImGui::CalcTextSize(hint);
-    dl->AddText(g_fonts.body, ImGui::GetFontSize(), ImVec2(wpos.x + wsz.x - pad - hts.x, footY),
-                ImGui::GetColorU32(kTextDim), hint);
+    if (drawHint) {
+        dl->AddText(g_fonts.body, ImGui::GetFontSize(), ImVec2(hintX, footY),
+                    ImGui::GetColorU32(kTextDim), hint);
+    }
 }
 
 
