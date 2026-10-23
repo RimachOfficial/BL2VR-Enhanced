@@ -7,9 +7,10 @@
 [![Game](https://img.shields.io/badge/game-Borderlands%202%20VR%20(Steam%20991260)-orange)](#install)
 [![Built with](https://img.shields.io/badge/built%20with-AI%20pair%20programming-9cf)](docs/THE_STORY.md)
 
-> **The story:** a 20-year-old aim problem (one-hand-only, jittery VR guns), four planned
-> implementation routes, one wrong runtime, one 55× clock bug — and a mod that shipped.
-> Full narrative with metrics and wrong turns: **[docs/THE_STORY.md](docs/THE_STORY.md)**.
+> **The story:** Borderlands 2 VR — a PSVR title (December 2018) ported to PC in 2019 — still
+> aims one-handed, with raw controller jitter on every shot. Four implementation routes were
+> planned, one runtime assumption turned out wrong, one 55× clock bug hid the fix — and the mod
+> shipped anyway. Full narrative with metrics and wrong turns: **[docs/THE_STORY.md](docs/THE_STORY.md)**.
 
 ---
 
@@ -59,8 +60,11 @@ copies the files, and creates a desktop shortcut (see [Launcher + config panel](
 **Uninstall:** copy `openvr_api_orig.dll` back over `openvr_api.dll` and delete `bl2vr_grip.ini`.
 (Or `openvr_proxy\install.ps1 -Restore` if you installed via script.)
 
-> **Important:** launching this game through SteamVR crashes it (a pre-existing game/runtime
-> incompatibility, reproducible with the untouched original DLL). Use Virtual Desktop.
+> **Runtime note:** on the setup this mod was built and tested on (Virtual Desktop + standalone
+> headset), the game runs through the **Oculus (LibOVR) runtime** — the PC port's VR layer comes
+> from its PSVR/Oculus-era development. Launching through SteamVR crashes the game on this setup
+> (a pre-existing issue, reproducible with the untouched original DLL — the crash happens before
+> any mod code runs). Launch via **Virtual Desktop**; that is also the path the mod hooks.
 
 ## How it works (short version)
 
@@ -334,7 +338,8 @@ Verification steps after a build: [docs/TESTING.md](docs/TESTING.md).
 ## Known limitations
 
 - **Positions are never modified** — by design, so you can slide your hands along the grip.
-- **SteamVR launch is broken** for this game (see above); Virtual Desktop is required.
+- **SteamVR launch crashes on the tested setup** (see [Runtime note](#install)); Virtual Desktop
+  is the supported path — it serves the game the Oculus (LibOVR) runtime the mod hooks.
 - The first sample after enabling has no filter history, so it starts from the raw pose.
 - Per-weapon differences (how a gun sits in the hand) may want a different `aim_axis` or a
   lower `twohand_blend`.

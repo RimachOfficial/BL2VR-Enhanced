@@ -10,7 +10,8 @@ one very patient tester in a headset. **Repo commits:** 19, conventional-commit 
 
 ## 1. The problem (context & scope)
 
-Borderlands 2 VR (Steam 991260) aims one-handed. In VR that means: every shot inherits your raw
+Borderlands 2 VR (Gearbox; PSVR December 2018, PC port April 2019; Steam 991260) aims
+one-handed. In VR that means: every shot inherits your raw
 wrist tremor, there is nothing to brace against, and long-range guns are lottery tickets. No
 two-handed-grip mod existed that we could find. Scope decisions made up front:
 

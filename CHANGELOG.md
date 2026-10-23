@@ -42,6 +42,7 @@ proxy that carries a MinHook detour on `ovr_GetTrackingState` in Virtual Desktop
 - Panel: black window (missing DX11 render target), duplicate widget IDs, streaky live resize.
 
 ### Known issues
-- SteamVR launch crashes the game (pre-existing, reproducible with the pristine DLL); launch
-  through Virtual Desktop.
+- SteamVR launch crashes the game on the tested setup (pre-existing, reproducible with the
+  pristine DLL — the crash precedes any mod code); launch through Virtual Desktop, which serves
+  the game its Oculus (LibOVR) runtime — the path the mod hooks.
 - First filter sample after enabling starts from the raw pose (no history yet).
