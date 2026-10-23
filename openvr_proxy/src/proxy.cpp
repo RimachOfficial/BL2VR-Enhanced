@@ -48,13 +48,16 @@ static void LogOpen() {
 static void Log(const char* fmt, ...) {
     if (!g_log) return;
     EnterCriticalSection(&g_cs);
-    SYSTEMTIME st; GetLocalTime(&st);
-    fprintf(g_log, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_list ap; va_start(ap, fmt);
-    vfprintf(g_log, fmt, ap);
-    va_end(ap);
-    fputc('\n', g_log);
-    fflush(g_log);
+    FILE* f = g_log;                       // local copy: DETACH may close it while we log
+    if (f) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        va_list ap; va_start(ap, fmt);
+        vfprintf(f, fmt, ap);
+        va_end(ap);
+        fputc('\n', f);
+        fflush(f);
+    }
     LeaveCriticalSection(&g_cs);
 }
 
@@ -62,13 +65,16 @@ static void Log(const char* fmt, ...) {
 void Bl2Log(const char* fmt, ...) {
     if (!g_log) return;
     EnterCriticalSection(&g_cs);
-    SYSTEMTIME st; GetLocalTime(&st);
-    fprintf(g_log, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
-    va_list ap; va_start(ap, fmt);
-    vfprintf(g_log, fmt, ap);
-    va_end(ap);
-    fputc('\n', g_log);
-    fflush(g_log);
+    FILE* f = g_log;                       // local copy: DETACH may close it while we log
+    if (f) {
+        SYSTEMTIME st; GetLocalTime(&st);
+        fprintf(f, "[%02d:%02d:%02d.%03d] ", st.wHour, st.wMinute, st.wSecond, st.wMilliseconds);
+        va_list ap; va_start(ap, fmt);
+        vfprintf(f, fmt, ap);
+        va_end(ap);
+        fputc('\n', f);
+        fflush(f);
+    }
     LeaveCriticalSection(&g_cs);
 }
 
@@ -205,8 +211,12 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID) {
         if (oh) CloseHandle(oh);
     } else if (reason == DLL_PROCESS_DETACH) {
         Log("=== openvr_api proxy detached ===");
+        // close the log under the same lock the loggers hold, and do NOT delete g_cs:
+        // our worker thread (ini reload / trigger poll) never exits, and tearing down the
+        // lock while it may still log would crash. The OS reclaims everything at exit.
+        EnterCriticalSection(&g_cs);
         if (g_log) { fclose(g_log); g_log = nullptr; }
-        DeleteCriticalSection(&g_cs);
+        LeaveCriticalSection(&g_cs);
     }
     return TRUE;
 }

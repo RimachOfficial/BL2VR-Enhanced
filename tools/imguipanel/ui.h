@@ -368,7 +368,7 @@ static void PageGunstock(IniFile& ini) {
     FloatKey(ini, "twohand_min_cutoff", "Position cutoff (Hz)##2h", "Hand-filter override while two-handing. 0 = use the base/trigger profile (recommended - the stock line has its own filter).", 0.0f, 30.0f);
     FloatKey(ini, "twohand_beta", "Position beta##2h", "How fast it opens up when you move while two-handing.", 0.0f, 20.0f);
     FloatKey(ini, "twohand_min_cutoff_rot", "Rotation cutoff (Hz)##2h", "0 = use the base/trigger profile (recommended).", 0.0f, 30.0f);
-    FloatKey(ini, "twohand_beta_rot", "Rotation beta##2h", "", 0.0f, 20.0f);
+    FloatKey(ini, "twohand_beta_rot", "Rotation beta##2h", "How fast the rotation filter opens up when you turn while two-handing. 0 = use the base profile.", 0.0f, 20.0f);
 
     SectionHeader("Catch-up (0 = off)");
     FloatKey(ini, "catchup_pos", "Position", "Extra stiffness per metre of lag. Kills a big lag without touching a small tremor.", 0.0f, 1000.0f, "%.0f");
@@ -379,7 +379,7 @@ static void PageAbout() {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("About"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR.");
     SectionHeader("Mod");
-    ImGui::BulletText("Version 0.1.1");
+    ImGui::BulletText("Version 0.1.2");
     ImGui::BulletText("GPL-3.0 - free to use, share and improve");
     ImGui::BulletText("No game files are modified; Remove restores the stock game");
     ImGui::BulletText("Launch through Virtual Desktop (Oculus runtime path)");

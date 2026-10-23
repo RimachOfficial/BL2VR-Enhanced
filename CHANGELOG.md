@@ -6,6 +6,30 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.2] — 2026-10-23
+
+### Fixed
+- **`twohand_min_dist` was never read by the mod** — the key existed in the ini, the README
+  and the panel, but the grip always engaged at the hard-coded 0.12 m. It is now read, so
+  the panel slider actually works.
+- **Thread-safety of the runtime hook** (found via code-graph audit):
+  - `NowDt()` ran outside the filter lock — two game threads could read the same clock and
+    double-feed time to the filters. The hook now takes an atomic snapshot
+    (config + clock + session reset) under `g_fcs` each call.
+  - `LoadCfg()` rewrote ~30 `g_cfg` fields non-atomically while the hook read them at
+    ~180 Hz — a reload could mix old/new profile values for one call. Config is now built
+    locally and published under the same lock the hook snapshots with.
+- **`LoadCfg` fallback defaults contradicted the shipped ini** (missing-key behavior):
+  `trigger_threshold` 0.5 → 0.25 (0.5 re-created the old dead-gate bug),
+  `derivative_cutoff` 1 → 6, `zoom_mult` 20 → 2, `min_cutoff`/`beta`/rot 3.0/1.0/2.0/0.6 →
+  4.5/2.0/3.0/1.5, `twohand_*` 1.5/8.0/1.0/6.0 → 3.0/2.2/2.0/1.5, `log_frames` 400 → 150.
+  All fallbacks now match the shipped `bl2vr_grip.ini`.
+- **Shutdown safety**: the log is closed under its own lock and the lock is no longer
+  deleted on DLL detach (the worker thread never exits and could still be logging).
+- Ini parser now skips `;`/`#` comment lines properly (the shipped ini has comments that
+  contain `=`, which parsed as bogus keys — harmless but wrong).
+- Panel: the "Rotation beta" override on the Gunstock page had an empty hover tooltip.
+
 ## [0.1.1] — 2026-10-23
 
 ### Added

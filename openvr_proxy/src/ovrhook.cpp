@@ -69,19 +69,24 @@ struct Cfg {
     // (trigger held or two-hand active). 0 = off = old behaviour.
     double catchPos, catchRot;
 };
-static Cfg  g_cfg = { 1, 1, 400, 1, 0, 3.0, 1.0, 1.0, 2.0, 0.6, 0.0, 1, 0.5, 20.0, 60.0,
+static Cfg  g_cfg = { 1, 1, 150, 1, 0, 4.5, 2.0, 6.0, 3.0, 1.5, 0.0, 1, 0.25, 2.0, 1.5,
                       2 /*zoomHand: 0=gun,1=offhand,2=either*/, 2.5, 2.0, 2.5,
                       1, 1, 0 /*gunHand: 0=left,1=right*/, 5 /*-z*/, 0 /*twohandButton: 0=grip,1=trigger*/,
                       0 /*twohandHand: 0=offhand,1=gun hand*/,
                       0.12, 0.75, 1.0,
                       0, 0, 0, 0,   // two-hand filter override: 0 = use the base/zoom profile
-                      0.0, 0.0 };
+                      0.0, 0.0 };   // defaults match the shipped bl2vr_grip.ini
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
     { 1, 0, 0 }, { -1, 0, 0 }, { 0, 1, 0 }, { 0, -1, 0 }, { 0, 0, 1 }, { 0, 0, -1 }
 };
 static const char* kAxisNames[6] = { "+x", "-x", "+y", "-y", "+z", "-z" };
+
+// The game calls ovr_GetTrackingState about twice per frame, and not necessarily from one
+// thread - so all filter state AND the g_cfg snapshot/clock are guarded by g_fcs
+// (the hook takes an atomic snapshot each call; LoadCfg publishes under the same lock).
+static CRITICAL_SECTION g_fcs;
 static char g_ini[MAX_PATH] = { 0 };
 
 // ---- single-read ini access (replaces ~30 GetPrivateProfile* calls per reload, each of
@@ -100,7 +105,8 @@ static bool IniLoad() {
 }
 
 // Find "key = value" in the already-loaded buffer. Case-insensitive, tolerates whitespace
-// around the key, the '=', and the value; ignores ';' comment lines naturally (no '=').
+// around the key, the '=', and the value; ';' and '#' comment lines are skipped (the
+// shipped ini has comments that contain '=' - without this they parse as bogus keys).
 static bool IniGet(const char* key, char* out, size_t outsz) {
     if (!out || !outsz) return false;
     out[0] = 0;
@@ -111,6 +117,12 @@ static bool IniGet(const char* key, char* out, size_t outsz) {
         const char* ln = p;
         while (ln < end && (*ln == ' ' || *ln == '\t')) ln++;
         if (ln >= end) break;
+        if (*ln == ';' || *ln == '#') {                 // comment line - skip it whole
+            p = ln;
+            while (p < end && *p != '\n' && *p != '\r') p++;
+            while (p < end && (*p == '\n' || *p == '\r')) p++;
+            continue;
+        }
         const char* nl = ln;
         while (nl < end && *nl != '\n' && *nl != '\r') nl++;
         const char* eq = ln;
@@ -152,77 +164,90 @@ static int CfgI(const char* key, int def) {
     }
     return def;
 }
+// Parse into a LOCAL Cfg and swap it in under g_fcs: the hook threads read g_cfg on
+// every call, so the reload must never leave it half-written (mixed old/new profile).
+// Fallback defaults match the shipped bl2vr_grip.ini (e.g. trigger_threshold 0.25 -
+// the documented fix for the dead gate; derivative_cutoff 6 - "deliberately high").
 static void LoadCfg() {
     if (!IniLoad()) return;              // one read of the whole file
-    g_cfg.enabled     = CfgI("enabled", 1);
-    g_cfg.log         = CfgI("log", 1);
-    g_cfg.logFrames   = CfgI("log_frames", 400);
-    g_cfg.smoothHands = CfgI("smooth_hands", 1);
-    g_cfg.smoothHead  = CfgI("smooth_head", 0);
-    g_cfg.minCutoff    = CfgD("min_cutoff", 3.0);
-    g_cfg.beta         = CfgD("beta", 1.0);
-    g_cfg.derivCutoff  = CfgD("derivative_cutoff", 1.0);
-    g_cfg.minCutoffRot = CfgD("min_cutoff_rot", 2.0);
-    g_cfg.betaRot      = CfgD("beta_rot", 0.6);
-    g_cfg.predictMs    = CfgD("predict_ms", 0.0);
-    g_cfg.triggerGate      = CfgI("trigger_gate", 1);
-    g_cfg.triggerThreshold = CfgD("trigger_threshold", 0.5);
-    g_cfg.zoomMult         = CfgD("zoom_mult", 20.0);
-    g_cfg.zoomMultRot      = CfgD("zoom_mult_rot", 0.0);   // 0 = same as zoom_mult
-    if (g_cfg.zoomMult < 1.0) g_cfg.zoomMult = 1.0;
-    if (g_cfg.zoomMultRot < 0.0) g_cfg.zoomMultRot = 0.0;
+    Cfg c = g_cfg;
+    c.enabled     = CfgI("enabled", 1);
+    c.log         = CfgI("log", 1);
+    c.logFrames   = CfgI("log_frames", 150);
+    c.smoothHands = CfgI("smooth_hands", 1);
+    c.smoothHead  = CfgI("smooth_head", 0);
+    c.minCutoff    = CfgD("min_cutoff", 4.5);
+    c.beta         = CfgD("beta", 2.0);
+    c.derivCutoff  = CfgD("derivative_cutoff", 6.0);
+    c.minCutoffRot = CfgD("min_cutoff_rot", 3.0);
+    c.betaRot      = CfgD("beta_rot", 1.5);
+    c.predictMs    = CfgD("predict_ms", 0.0);
+    c.triggerGate      = CfgI("trigger_gate", 1);
+    c.triggerThreshold = CfgD("trigger_threshold", 0.25);
+    c.zoomMult         = CfgD("zoom_mult", 2.0);
+    c.zoomMultRot      = CfgD("zoom_mult_rot", 0.0);   // 0 = same as zoom_mult
+    if (c.zoomMult < 1.0) c.zoomMult = 1.0;
+    if (c.zoomMultRot < 0.0) c.zoomMultRot = 0.0;
 
     // which hand's trigger drives the zoom gate ("gun" / "offhand" / "either")
     {
         char zh[32] = { 0 };
         IniGet("zoom_hand", zh, sizeof(zh));
-        g_cfg.zoomHand = (zh[0] == 'o' || zh[0] == 'O') ? 1
-                       : (zh[0] == 'e' || zh[0] == 'E') ? 2 : 0;
+        c.zoomHand = (zh[0] == 'o' || zh[0] == 'O') ? 1
+                    : (zh[0] == 'e' || zh[0] == 'E') ? 2 : 0;
     }
     // virtual gunstock: the aim line's own One Euro filter (see ApplyStock)
-    g_cfg.stockCutoff   = CfgD("stock_cutoff", 2.5);
-    g_cfg.stockBeta     = CfgD("stock_beta", 2.0);
-    g_cfg.stockZoomMult = CfgD("stock_zoom_mult", 2.5);
-    if (g_cfg.stockZoomMult < 1.0) g_cfg.stockZoomMult = 1.0;
+    c.stockCutoff   = CfgD("stock_cutoff", 2.5);
+    c.stockBeta     = CfgD("stock_beta", 2.0);
+    c.stockZoomMult = CfgD("stock_zoom_mult", 2.5);
+    if (c.stockZoomMult < 1.0) c.stockZoomMult = 1.0;
 
     // ---- two-handed grip ----
-    g_cfg.twohand     = CfgI("twohand", 1);
-    g_cfg.twohandGate = CfgI("twohand_gate", 1);
+    c.twohand     = CfgI("twohand", 1);
+    c.twohandGate = CfgI("twohand_gate", 1);
     {
         char tb[32] = { 0 };
         IniGet("twohand_button", tb, sizeof(tb));
-        g_cfg.twohandButton = (tb[0] == 't' || tb[0] == 'T') ? 1 : 0;   // 0 = grip, 1 = trigger
+        c.twohandButton = (tb[0] == 't' || tb[0] == 'T') ? 1 : 0;   // 0 = grip, 1 = trigger
     }
     {
         char gh[32] = { 0 };
         IniGet("gun_hand", gh, sizeof(gh));
-        g_cfg.gunHand = (gh[0] == 'l' || gh[0] == 'L') ? 0 : 1;      // 0 = left, 1 = right
+        c.gunHand = (gh[0] == 'l' || gh[0] == 'L') ? 0 : 1;      // 0 = left, 1 = right
     }
     {
         char ax[16] = { 0 };
         IniGet("aim_axis", ax, sizeof(ax));
         int idx = 5;
         for (int i = 0; i < 6; i++) if (_stricmp(ax, kAxisNames[i]) == 0) { idx = i; break; }
-        g_cfg.axisIndex = idx;
+        c.axisIndex = idx;
     }
     {
         char hh[32] = { 0 };
         IniGet("twohand_hand", hh, sizeof(hh));
-        g_cfg.twohandHand = (hh[0] == 'g' || hh[0] == 'G') ? 1 : 0;   // 0 = offhand, 1 = gun hand
+        c.twohandHand = (hh[0] == 'g' || hh[0] == 'G') ? 1 : 0;   // 0 = offhand, 1 = gun hand
     }
-    g_cfg.twohandMaxDist = CfgD("twohand_max_dist", 0.75);
-    g_cfg.twohandBlend   = CfgD("twohand_blend", 1.0);
-    if (g_cfg.twohandBlend < 0.0) g_cfg.twohandBlend = 0.0;
-    if (g_cfg.twohandBlend > 1.0) g_cfg.twohandBlend = 1.0;
+    c.twohandMinDist = CfgD("twohand_min_dist", 0.12);
+    c.twohandMaxDist = CfgD("twohand_max_dist", 0.75);
+    c.twohandBlend   = CfgD("twohand_blend", 1.0);
+    if (c.twohandBlend < 0.0) c.twohandBlend = 0.0;
+    if (c.twohandBlend > 1.0) c.twohandBlend = 1.0;
+    if (c.twohandMinDist < 0.0) c.twohandMinDist = 0.0;
+    if (c.twohandMaxDist < c.twohandMinDist) c.twohandMaxDist = c.twohandMinDist;
     // two-hand-only filter profile (0 = fall back to the zoom profile)
-    g_cfg.thMinCutoff    = CfgD("twohand_min_cutoff", 1.5);
-    g_cfg.thBeta         = CfgD("twohand_beta", 8.0);
-    g_cfg.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 1.0);
-    g_cfg.thBetaRot      = CfgD("twohand_beta_rot", 6.0);
-    g_cfg.catchPos       = CfgD("catchup_pos", 0.0);
-    g_cfg.catchRot       = CfgD("catchup_rot", 0.0);
-    if (g_cfg.catchPos < 0.0) g_cfg.catchPos = 0.0;
-    if (g_cfg.catchRot < 0.0) g_cfg.catchRot = 0.0;
+    c.thMinCutoff    = CfgD("twohand_min_cutoff", 3.0);
+    c.thBeta         = CfgD("twohand_beta", 2.2);
+    c.thMinCutoffRot = CfgD("twohand_min_cutoff_rot", 2.0);
+    c.thBetaRot      = CfgD("twohand_beta_rot", 1.5);
+    c.catchPos       = CfgD("catchup_pos", 0.0);
+    c.catchRot       = CfgD("catchup_rot", 0.0);
+    if (c.catchPos < 0.0) c.catchPos = 0.0;
+    if (c.catchRot < 0.0) c.catchRot = 0.0;
+
+    // publish atomically: the hook threads snapshot g_cfg under the same lock
+    EnterCriticalSection(&g_fcs);
+    g_cfg = c;
+    LeaveCriticalSection(&g_fcs);
 }
 
 // ---------- smoothing state ----------
@@ -279,10 +304,6 @@ static float  g_prevFiltQ[4] = { 0, 0, 0, 1 };
 static bool   g_prevQValid = false;
 static double g_accRawDeg = 0.0, g_accFiltDeg = 0.0;
 static int    g_accN = 0;
-
-// The game calls ovr_GetTrackingState about twice per frame, and not necessarily from one
-// thread - so all filter state must be guarded or two threads fight over the same quaternions.
-static CRITICAL_SECTION g_fcs;
 
 static double QuatAngleDeg(const float* a, const float* b) {
     // Stable for tiny angles: build the relative rotation a * conj(b) and use atan2 on its
@@ -450,8 +471,8 @@ static int    g_bestAxis = -1;
 static double g_bestAxisDot = -2.0;
 
 // engagement check only - runs on the raw tracking state, before the filters
-static bool StockActive(const ovrTrackingState* st) {
-    const int gun = g_cfg.gunHand, off = 1 - gun;
+static bool StockActive(const ovrTrackingState* st, const Cfg& cfg) {
+    const int gun = cfg.gunHand, off = 1 - gun;
     if (!(st->HandStatusFlags[gun] & STATUS_POSITION_TRACKED)) return false;
     if (!(st->HandStatusFlags[off] & STATUS_POSITION_TRACKED)) return false;
     const ovrPoseStatef* pg = &st->HandPoses[gun];
@@ -460,12 +481,12 @@ static bool StockActive(const ovrTrackingState* st) {
     const double dy = (double)po->ThePose.Position.y - pg->ThePose.Position.y;
     const double dz = (double)po->ThePose.Position.z - pg->ThePose.Position.z;
     const double len = sqrt(dx*dx + dy*dy + dz*dz);
-    return len >= g_cfg.twohandMinDist && len <= g_cfg.twohandMaxDist;
+    return len >= cfg.twohandMinDist && len <= cfg.twohandMaxDist;
 }
 
 // the solve - runs AFTER the hand filters, inside g_fcs
-static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld) {
-    const int gun = g_cfg.gunHand, off = 1 - gun;
+static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld, const Cfg& cfg) {
+    const int gun = cfg.gunHand, off = 1 - gun;
     ovrPoseStatef*       pg = &st->HandPoses[gun];
     const ovrPoseStatef* po = &st->HandPoses[off];
 
@@ -478,12 +499,12 @@ static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld) {
 
     // the stock's own smoothing (its "weight"). The trigger makes it heavier; the 1 Hz
     // floor keeps it out of the multi-second-float territory.
-    double sc = g_cfg.stockCutoff, sb = g_cfg.stockBeta;
-    if (gateHeld) { sc /= g_cfg.stockZoomMult; sb /= g_cfg.stockZoomMult; }
+    double sc = cfg.stockCutoff, sb = cfg.stockBeta;
+    if (gateHeld) { sc /= cfg.stockZoomMult; sb /= cfg.stockZoomMult; }
     if (sc < 1.0) sc = 1.0;
     if (sb < 0.0) sb = 0.0;
     float fDes[3];
-    g_stockLine.step(aim, dt, sc, sb, g_cfg.derivCutoff, 0.0, nullptr, fDes);
+    g_stockLine.step(aim, dt, sc, sb, cfg.derivCutoff, 0.0, nullptr, fDes);
     double ol = sqrt((double)fDes[0]*fDes[0] + (double)fDes[1]*fDes[1] + (double)fDes[2]*fDes[2]);
     if (ol < 1e-6) return;
     fDes[0] = (float)(fDes[0]/ol); fDes[1] = (float)(fDes[1]/ol); fDes[2] = (float)(fDes[2]/ol);
@@ -491,7 +512,7 @@ static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld) {
     float qg[4] = { pg->ThePose.Orientation.x, pg->ThePose.Orientation.y,
                     pg->ThePose.Orientation.z, pg->ThePose.Orientation.w };
     float fCur[3];
-    QuatRotateVec(qg, kAxes[g_cfg.axisIndex], fCur);
+    QuatRotateVec(qg, kAxes[cfg.axisIndex], fCur);
     double fl = sqrt((double)fCur[0]*fCur[0] + (double)fCur[1]*fCur[1] + (double)fCur[2]*fCur[2]);
     if (fl < 1e-6) return;
     fCur[0] /= (float)fl; fCur[1] /= (float)fl; fCur[2] /= (float)fl;
@@ -499,9 +520,9 @@ static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld) {
     float qd[4], qNew[4];
     QuatFromTo(fCur, fDes, qd);
     QuatMul(qd, qg, qNew);                       // world-space delta applied on the left
-    if (g_cfg.twohandBlend < 1.0) {
+    if (cfg.twohandBlend < 1.0) {
         float qb[4];
-        SlerpQ(qg, qNew, (float)g_cfg.twohandBlend, qb);
+        SlerpQ(qg, qNew, (float)cfg.twohandBlend, qb);
         qNew[0]=qb[0]; qNew[1]=qb[1]; qNew[2]=qb[2]; qNew[3]=qb[3];
     }
     QuatNormalizeF(qNew);
@@ -539,9 +560,20 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
 
     ovrTrackingState* st = (ovrTrackingState*)retbuf;
     LONG c = InterlockedIncrement(&g_calls);
-    if (session != g_lastSession) { g_lastSession = session; ResetFilters(); }
 
-    double dt = NowDt();
+    // ---- atomic snapshot under g_fcs: config + filter clock + session-change reset ----
+    // The hook can be called from more than one game thread, and LoadCfg() on our worker
+    // thread rewrites g_cfg every ~2 s. Everything below reads this local copy (cfg, dt) -
+    // never the globals - so no mixed old/new profile and no double-fed dt.
+    Cfg cfg;
+    double dt;
+    {
+        EnterCriticalSection(&g_fcs);
+        if (session != g_lastSession) { g_lastSession = session; ResetFilters(); }
+        dt = NowDt();
+        cfg = g_cfg;
+        LeaveCriticalSection(&g_fcs);
+    }
 
     // ---- trigger gate ----
     // The right index trigger is the game's zoom/aim bind. While it is held we divide the
@@ -551,43 +583,43 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
 
     const double trigGun  = (double)g_trigger1000 / 1000.0;
     const double trigOff  = (double)g_trigOff1000 / 1000.0;
-    const double trig     = (g_cfg.zoomHand == 1) ? trigOff
-                          : (g_cfg.zoomHand == 2) ? (trigGun > trigOff ? trigGun : trigOff)
+    const double trig     = (cfg.zoomHand == 1) ? trigOff
+                          : (cfg.zoomHand == 2) ? (trigGun > trigOff ? trigGun : trigOff)
                           : trigGun;
     const double grip     = (double)g_grip1000 / 1000.0;
-    const bool   trigHeld = (trig >= g_cfg.triggerThreshold);
-    const bool   gripHeld = (grip >= g_cfg.triggerThreshold);
-    const bool   gateHeld = (g_cfg.triggerGate != 0) && trigHeld;
+    const bool   trigHeld = (trig >= cfg.triggerThreshold);
+    const bool   gripHeld = (grip >= cfg.triggerThreshold);
+    const bool   gateHeld = (cfg.triggerGate != 0) && trigHeld;
     // two-hand mode's button lives on the OFFHAND by default (on the gun hand the grip is the
     // game's reload bind). Smoothing/zoom always follows the GUN hand's index trigger.
     const double btnTrig  = (double)g_btnTrig1000 / 1000.0;
-    const bool   twoHandHeld = g_cfg.twohandButton ? (btnTrig >= g_cfg.triggerThreshold)
+    const bool   twoHandHeld = cfg.twohandButton ? (btnTrig >= cfg.triggerThreshold)
                                                    : gripHeld;
-    const bool   doSmooth = g_cfg.enabled && g_cfg.smoothHands &&
-                            (g_cfg.triggerGate != 2 || gateHeld);
-    const double mult    = (g_cfg.triggerGate != 0 && gateHeld) ? g_cfg.zoomMult : 1.0;
+    const bool   doSmooth = cfg.enabled && cfg.smoothHands &&
+                            (cfg.triggerGate != 2 || gateHeld);
+    const double mult    = (cfg.triggerGate != 0 && gateHeld) ? cfg.zoomMult : 1.0;
     // rotation gets its own multiplier: for sniping it is the angular jitter that hurts,
     // because a tiny angle becomes a big miss at distance.
-    const double multRot = (g_cfg.triggerGate != 0 && gateHeld)
-                           ? (g_cfg.zoomMultRot > 0 ? g_cfg.zoomMultRot : g_cfg.zoomMult) : 1.0;
+    const double multRot = (cfg.triggerGate != 0 && gateHeld)
+                           ? (cfg.zoomMultRot > 0 ? cfg.zoomMultRot : cfg.zoomMult) : 1.0;
     {   // diagnostic: one line each time the trigger gate flips, with the poll result code
         static int s_prevGate = -1;
         const int gnow = gateHeld ? 1 : 0;
-        if (g_cfg.log && gnow != s_prevGate) {
+        if (cfg.log && gnow != s_prevGate) {
             s_prevGate = gnow;
             Bl2Log("trigger gate -> %s  trig=%.3f (gun %.3f / off %.3f, hand=%s, threshold %.2f)  poll_rc=%ld  gun_hand=%s  zoom x%.1f/%.1f",
                    gnow ? "HELD" : "released", trig, trigGun, trigOff,
-                   g_cfg.zoomHand == 0 ? "gun" : g_cfg.zoomHand == 1 ? "offhand" : "either",
-                   g_cfg.triggerThreshold, (long)g_pollRcGun,
-                   g_cfg.gunHand == 0 ? "left" : "right", mult, multRot);
+                   cfg.zoomHand == 0 ? "gun" : cfg.zoomHand == 1 ? "offhand" : "either",
+                   cfg.triggerThreshold, (long)g_pollRcGun,
+                   cfg.gunHand == 0 ? "left" : "right", mult, multRot);
         }
     }
     // ---- virtual gunstock: engaged by its button + hand distance. The check runs on the
     //      RAW data here so the filter profile can react this frame; the solve itself runs
     //      on the FILTERED hands right after the filter loop below (smoothing is the base). ----
     g_twoHandActive = 0;
-    if (g_cfg.twohand && (g_cfg.twohandGate == 0 || twoHandHeld)) {
-        if (StockActive(st)) g_twoHandActive = 1;
+    if (cfg.twohand && (cfg.twohandGate == 0 || twoHandHeld)) {
+        if (StockActive(st, cfg)) g_twoHandActive = 1;
     }
 
     // ---- pick the filter profile ----
@@ -595,22 +627,22 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // for the hands (the stock line has its own filter in ApplyStock). The th* keys remain
     // as an optional hand-filter override while two-handing; 0 = fall back (recommended).
     double mc, bt, mcr, btr;
-    if (g_twoHandActive && g_cfg.thMinCutoffRot > 0.0) {
-        mc  = g_cfg.thMinCutoff;
-        bt  = g_cfg.thBeta;
-        mcr = g_cfg.thMinCutoffRot;
-        btr = g_cfg.thBetaRot;
+    if (g_twoHandActive && cfg.thMinCutoffRot > 0.0) {
+        mc  = cfg.thMinCutoff;
+        bt  = cfg.thBeta;
+        mcr = cfg.thMinCutoffRot;
+        btr = cfg.thBetaRot;
     } else {
-        mc  = g_cfg.minCutoff    / mult;
-        bt  = g_cfg.beta    / mult;
-        mcr = g_cfg.minCutoffRot / multRot;
-        btr = g_cfg.betaRot / multRot;
+        mc  = cfg.minCutoff    / mult;
+        bt  = cfg.beta    / mult;
+        mcr = cfg.minCutoffRot / multRot;
+        btr = cfg.betaRot / multRot;
     }
 
     // catch-up only for the heavy profiles, so the light base profile keeps its current feel
     const bool heavy = gateHeld || (g_twoHandActive != 0);
-    const double cPos = heavy ? g_cfg.catchPos : 0.0;
-    const double cRot = heavy ? g_cfg.catchRot : 0.0;
+    const double cPos = heavy ? cfg.catchPos : 0.0;
+    const double cRot = heavy ? cfg.catchRot : 0.0;
 
     EnterCriticalSection(&g_fcs);
     if (doSmooth) {
@@ -627,9 +659,9 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
             float q[4] = { ps->ThePose.Orientation.x, ps->ThePose.Orientation.y,
                            ps->ThePose.Orientation.z, ps->ThePose.Orientation.w };
             float op[3], oq[4];
-            g_fpos[h].step(p, dt, mc,  bt,  g_cfg.derivCutoff,
-                           g_cfg.predictMs / 1000.0, v, op);
-            g_frot[h].step(q, dt, mcr, btr, g_cfg.derivCutoff, oq);
+            g_fpos[h].step(p, dt, mc,  bt,  cfg.derivCutoff,
+                           cfg.predictMs / 1000.0, v, op);
+            g_frot[h].step(q, dt, mcr, btr, cfg.derivCutoff, oq);
 
             if (h == HAND_RIGHT) {          // rotation noise: raw vs filtered
                 if (g_prevQValid) {
@@ -654,26 +686,26 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // low-passed once more (stock_cutoff) - a quick main-hand movement only leans the aim.
     // Runs inside the same lock as the filters (the hook can be called from two threads).
     if (g_twoHandActive) {
-        ApplyStock(st, dt, gateHeld);
+        ApplyStock(st, dt, gateHeld, cfg);
         g_stockWasActive = true;
     } else if (g_stockWasActive) {
         g_stockLine.reset();          // re-engaging the stock must not sweep across
         g_stockWasActive = false;
     }
     LeaveCriticalSection(&g_fcs);
-    if (g_cfg.enabled && g_cfg.smoothHead) {
+    if (cfg.enabled && cfg.smoothHead) {
         if (!(st->StatusFlags & STATUS_POSITION_TRACKED)) {
             g_fhead.reset();
         } else {
             float p[3] = { st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z };
             float op[3];
-            g_fhead.step(p, dt, g_cfg.minCutoff, g_cfg.beta, g_cfg.derivCutoff, 0.0, nullptr, op);
+            g_fhead.step(p, dt, cfg.minCutoff, cfg.beta, cfg.derivCutoff, 0.0, nullptr, op);
             st->HeadPose.ThePose.Position.x = op[0];
             st->HeadPose.ThePose.Position.y = op[1];
             st->HeadPose.ThePose.Position.z = op[2];
         }
     }
-    if (g_cfg.log && (c <= g_cfg.logFrames || (c % 120) == 0)) {
+    if (cfg.log && (c <= cfg.logFrames || (c % 120) == 0)) {
         Bl2Log("#%ld dt=%.4f flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
             c, dt, st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
             trig, grip, mult, multRot, (int)doSmooth, g_twoHandActive,
@@ -696,8 +728,8 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // Two-hand status + the axis calibration hint.
     if (g_twoHandActive && (c % 120) == 0) {
         Bl2Log("twohand: ACTIVE  gun_hand=%s  using axis %s  stock=%.2f Hz%s  |  best-matching axis=%s (%.3f) <- if this is not the axis above, change aim_axis",
-               g_cfg.gunHand == 0 ? "left" : "right", kAxisNames[g_cfg.axisIndex],
-               (gateHeld ? g_cfg.stockCutoff / g_cfg.stockZoomMult : g_cfg.stockCutoff),
+               cfg.gunHand == 0 ? "left" : "right", kAxisNames[cfg.axisIndex],
+               (gateHeld ? cfg.stockCutoff / cfg.stockZoomMult : cfg.stockCutoff),
                gateHeld ? " (trigger: heavier stock)" : "",
                g_bestAxis >= 0 ? kAxisNames[g_bestAxis] : "?", g_bestAxisDot);
     }
