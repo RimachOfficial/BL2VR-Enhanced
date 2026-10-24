@@ -41,7 +41,8 @@ graph TD
 Design rules that fell out of testing (see [README](../README.md#how-the-smoothing-works)):
 
 - **Smoothing is the base of everything** — the stock line is derived from already-filtered hands.
-- **Positions are never rewritten** — only orientation, so hands slide freely on the grip.
+- **The stock solve never rewrites positions** — only orientation, so hands slide freely on the
+  grip. (The hand filter smooths positions; that is a separate stage.)
 - **Delta application** — the solve is applied as a delta on top of the raw pose, so the game's
   per-weapon grip offsets survive.
 - **No thresholds anywhere** — a speed/error "bubble" toggled several times a second while

@@ -6,6 +6,30 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-10-23
+
+### Added
+- `tools/tremor_sweep.cpp` — how much of an **8 Hz hand tremor** survives each cutoff, using the
+  real filter code. It produced the honest number this project was missing: the shipped base
+  profile (3.0 Hz rotation) leaves **34%** of the tremor, not the ~10% the docs implied (that
+  figure came from the heavy trigger/two-hand profiles). Full table in `docs/METRICS.md`.
+- Panel profile **Locked** — precision preset using cutoffs *below* the project's 1 Hz floor,
+  guarded by a strong catch-up term. Steady/Responsive were also spread wider (1.0 Hz / 6.0 Hz)
+  so switching profiles is unmistakable instead of a subtle nudge.
+- Logging: periodic lines now carry `prof=` (the live filter values actually in use), and a failed
+  or empty `IniLoad` now logs instead of silently keeping the old config — a silent reload failure
+  looked exactly like "changing a setting did nothing".
+
+### Fixed
+- Panel ini writes are now atomic (temp file + `MoveFileExA`). The mod re-reads the file every 2 s,
+  so a truncate-and-rewrite could be caught mid-write and parsed as a partial file — missing keys
+  fall back to defaults, which looks like "the profile did nothing".
+- Docs claimed "positions are never modified" — the **stock solve** never moves positions, but the
+  hand filter does smooth them (that is what removes positional tremor). Corrected in README,
+  ARCHITECTURE and the limitations list.
+- `derivative_cutoff` (6 Hz vs the reference spec's ~1 Hz) was investigated as a possible cause of
+  weak filtering and **measured to be a non-issue** (<1% tremor difference); recorded in METRICS.
+
 ## [0.1.4] — 2026-10-23
 
 ### Added

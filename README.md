@@ -28,11 +28,14 @@
 | **Zoom/ADS feel** | Nothing changes when aiming | Trigger makes the stock progressively heavier (1 Hz floor) |
 | **Install** | — | 2 files + a panel; no game-file edits, reversible |
 
-**One internal trade, stated openly:** an earlier heavy tuning suppressed hand tremor harder
-(kept ~5% of it) but lagged 13.9° on fast moves and *floated* for 1.28 s after you stopped. The
-shipped tuning keeps ~10% of tremor in exchange for 1.8° lag and a 0.08 s settle. A lagging gun
-misses; a slightly livelier gun still hits — but if you want the heavier feel, the **Steady**
-profile in the panel is close to it. Full bench numbers: [docs/METRICS.md](docs/METRICS.md).
+**One internal trade, stated openly:** the **shipped base profile** (rotation cutoff 3.0 Hz)
+removes about **two thirds of an 8 Hz hand tremor** — measured, not estimated:
+`tools/tremor_sweep.cpp` reports 34–38% of the tremor still present. The **Steady** profile
+(1.0 Hz) leaves ~13%, **Locked** (0.8 Hz) ~10%, while **Responsive** (6.0 Hz) leaves ~60%. The
+price is lag: 53 ms at the default, 159 ms at 1.0 Hz. An earlier heavy tuning suppressed tremor
+harder still but lagged 13.9° on fast moves and *floated* for 1.28 s after you stopped, which is
+why the defaults sit where they do. Pick a profile by feel — the spread is wide on purpose.
+Full bench + sweep numbers: [docs/METRICS.md](docs/METRICS.md).
 
 ## Features
 
@@ -115,7 +118,8 @@ gun orientation = rotate(barrel_axis -> aim_line) * gun orientation
 The hands are filtered first (base/trigger profile), the line between them is then smoothed once
 more by its **own** One Euro filter, and only that smoothed line drives the gun. Because it is a
 delta on top of the filtered pose, the game's own per-weapon "how the gun sits in the hand" offset
-is preserved. **Positions are never modified** — the hands stay free to slide along the grip, and
+is preserved. **The stock solve never moves positions** — only the aim orientation — so your hands
+stay free to slide along the grip, and
 a quick main-hand movement only leans the aim instead of throwing it.
 
 ---
@@ -212,6 +216,7 @@ version / controller. There is a built-in helper:
 | Mod DLL (`openvr_api.dll`) | MSVC 2022+ (VS 18 tested), x64 | `openvr_proxy\build.bat` |
 | Config panel (`bl2vr_panel.exe`) | MSVC, x64 | `tools\imguipanel\build.bat` |
 | Offline filter bench | any C++17 compiler (g++/MSVC) | see [docs/METRICS.md](docs/METRICS.md) |
+| Tremor sweep (`tools/tremor_sweep.cpp`) | any C++17 compiler | `g++ -O2 -std=c++17 -I openvr_proxy tools/tremor_sweep.cpp -o tremor_sweep` |
 
 MinHook is vendored under `third_party\minhook-master\` (BSD-3-Clause); ImGui (MIT) under
 `tools\imguipanel\imgui\`. No package manager needed. `tools\ovr_proxy_legacy\` is the abandoned
@@ -220,7 +225,9 @@ Verification steps after a build: [docs/TESTING.md](docs/TESTING.md).
 
 ## Known limitations
 
-- **Positions are never modified** — by design, so you can slide your hands along the grip.
+- **The stock solve never moves your hands** — only the aim rotation — so hands slide freely along
+  the grip. (The hand filter *does* smooth positions; that is a separate stage and is what removes
+  positional tremor.)
 - **SteamVR launch crashes on the tested setup** (see [Compatibility](#compatibility--read-this-first));
   Virtual Desktop is the supported path.
 - **Untested on Link/Rift and SteamVR setups** — see [Compatibility](#compatibility--read-this-first).

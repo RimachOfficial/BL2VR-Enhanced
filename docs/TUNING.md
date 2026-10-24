@@ -46,11 +46,24 @@ g++ -O2 -std=c++17 -I openvr_proxy tools/filter_bench.cpp -o filter_bench.exe
 | two-hand, old 0.4 Hz | 4.29 | 9.29 | 0.92 s | 0.87 s | 5.2% |
 | two-hand, 0.30 Hz + catchup 120 | **0.86** | **1.55** | **0.05 s** | 0.22 s | 10.8% |
 
-Read it honestly: the current tuning keeps **about twice as much tremor** as the old heavy
-tuning (10.4% of an 8 Hz hand tremor passes through, vs 4.8%). In exchange, fast-move rotation
-lag drops from 13.9° to 1.8° and the post-move float from 1.28 s to 0.08 s. That is the right
-trade for a shooter — a lagging gun misses, a slightly livelier gun still hits — but it *is* a
-trade. If you want the old heavier feel, lower the cutoffs and accept the drift.
+Read it honestly: those rows are the **heavy trigger/two-hand profiles** from the bench. The old
+rows kept 4.8%/5.2% of the tremor; the current rows keep 10.4%/10.8% in exchange for a 16× faster
+settle and 7.7× less lag. That is the right trade for a shooter — a lagging gun misses, a
+slightly livelier gun still hits — but it *is* a trade. If you want the old heavier feel, lower
+the cutoffs and accept the drift.
+
+**Two different numbers, two different jobs** — do not mix them up:
+
+| Metric | What it measures | Where |
+|---|---|---|
+| jitter meter `3.3×` (in-game log) | how much the rotation *moves per call* — high-frequency content | `openvr_proxy.log`, `jitter R-rot` line |
+| tremor sweep `34%` (offline) | how much of an **8 Hz hand tremor amplitude** survives | `tools/tremor_sweep.cpp` |
+
+The first is a per-call delta ratio (it looks great because high-frequency motion is what a
+low-pass removes first); the second is the felt wobble, and at the shipped 3.0 Hz cutoff it is
+**34% — a third of the tremor still gets through**. See the full table in
+[METRICS.md](METRICS.md#1b-tremor-sweep--how-much-hand-tremor-actually-survives). If you want the
+"the mod is clearly doing something" feel, that table is where to pick a profile from.
 
 ### The rule that matters: no sub-1 Hz cutoffs
 

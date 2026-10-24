@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <utility>
+#include <windows.h>   // MoveFileExA for the atomic ini swap
 
 struct CfgVal {
     std::string key;
@@ -88,11 +89,19 @@ public:
         Parse();
         return ok;
     }
+    // Atomic replace: the mod re-reads this file every 2 s, so a truncate-and-rewrite could be
+    // caught mid-write and parsed as a partial file (missing keys -> fallback defaults, which
+    // looks exactly like "changing a setting did nothing"). Write a temp file, then swap.
     bool Save() {
+        const std::string tmp = path + ".tmp";
         FILE* f = nullptr;
-        if (fopen_s(&f, path.c_str(), "wb")) return false;
-        fwrite(raw.data(), 1, raw.size(), f);
+        if (fopen_s(&f, tmp.c_str(), "wb")) return false;
+        if (!raw.empty()) fwrite(raw.data(), 1, raw.size(), f);
         fclose(f);
+        if (!MoveFileExA(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+            DeleteFileA(tmp.c_str());
+            return false;
+        }
         return true;
     }
 };

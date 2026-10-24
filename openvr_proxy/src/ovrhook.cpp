@@ -101,11 +101,25 @@ static size_t g_iniLen = 0;
 static bool IniLoad() {
     g_iniLen = 0;
     FILE* f = nullptr;
-    if (fopen_s(&f, g_ini, "rb") != 0 || !f) return false;
+    if (fopen_s(&f, g_ini, "rb") != 0 || !f) {
+        // Silent failures here were invisible: a failed reload keeps the OLD config, which looks
+        // exactly like "changing a setting did nothing". Throttle, but never hide it.
+        static int s_fail = 0;
+        if (++s_fail <= 3 || (s_fail % 30) == 0)
+            Bl2Log("ini reload FAILED (%d): cannot open \"%s\" - still using the previous config", s_fail, g_ini);
+        return false;
+    }
     g_iniLen = fread(g_iniBuf, 1, sizeof(g_iniBuf) - 1, f);
     fclose(f);
     g_iniBuf[g_iniLen] = 0;
-    return g_iniLen > 0;
+    if (g_iniLen == 0) {
+        static int s_empty = 0;
+        if (++s_empty <= 3 || (s_empty % 30) == 0)
+            Bl2Log("ini reload FAILED (%d): \"%s\" read back empty (mid-write?) - previous config kept",
+                   s_empty, g_ini);
+        return false;
+    }
+    return true;
 }
 
 // Find "key = value" in the already-loaded buffer. Case-insensitive, tolerates whitespace
@@ -762,9 +776,9 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         }
     }
     if (cfg.log && (c <= cfg.logFrames || (c % 120) == 0)) {
-        Bl2Log("#%ld dt=%.4f t=%.4f tid=%lu flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
+        Bl2Log("#%ld dt=%.4f t=%.4f tid=%lu flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f prof=%.2f/%.2f/%.2f/%.2f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
             c, dt, absTime, (unsigned long)GetCurrentThreadId(), st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
-            trig, grip, mult, multRot, (int)doSmooth, g_twoHandActive,
+            trig, grip, mult, multRot, mc, bt, mcr, btr, (int)doSmooth, g_twoHandActive,
             st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z,
             st->HandPoses[0].ThePose.Position.x, st->HandPoses[0].ThePose.Position.y, st->HandPoses[0].ThePose.Position.z,
             st->HandPoses[1].ThePose.Position.x, st->HandPoses[1].ThePose.Position.y, st->HandPoses[1].ThePose.Position.z,

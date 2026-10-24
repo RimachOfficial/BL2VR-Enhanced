@@ -39,6 +39,52 @@ settle threshold 0.5°.
 
 Settle-time reference used in the log: `settle(95%) ≈ 2.4 · smoothTime = 0.38 / cutoff`.
 
+## 1b. Tremor sweep — how much hand tremor actually survives
+
+`tools/tremor_sweep.cpp` answers the one question the bench above does not: **of an 8 Hz hand
+tremor (where VR hand shake actually lives), how much is left in the output?** Same real filter
+code, 120 Hz, 5 s settle + 5 s measure, peak amplitude of the output vs the input.
+
+```
+g++ -O2 -std=c++17 -I openvr_proxy tools/tremor_sweep.cpp -o tremor_sweep
+./tremor_sweep
+```
+
+| rotation cutoff | lag at rest | tremor 0.3° kept | tremor 1.0° kept |
+|---|---|---|---|
+| 6.0 Hz (Responsive) | 27 ms | 60% | 62% |
+| 4.5 Hz | 35 ms | 46.5% | 49.0% |
+| **3.0 Hz (shipped default)** | 53 ms | **34.4%** | **37.7%** |
+| 2.25 Hz (Hybrid) | 71 ms | 27.1% | 29.9% |
+| 2.0 Hz | 80 ms | 24.4% | 26.8% |
+| 1.5 Hz | 106 ms | 18.8% | 20.9% |
+| 1.0 Hz (Steady) | 159 ms | 12.7% | 14.1% |
+| 0.8 Hz (Locked) | 199 ms | ~10% | ~11% |
+| 0.5 Hz | 318 ms | 6.5% | 7.4% |
+
+Read that honestly: **the shipped base profile removes about two thirds of the tremor, not "all of
+it"** — a third still gets through, which is exactly why a lighter profile can feel like "the mod
+is barely doing anything". The profiles in the panel spread across this table on purpose.
+
+It is also roughly amplitude-independent (0.3° vs 1.0° tremor give similar percentages), i.e. the
+adaptive cutoff does not collapse on bigger transients.
+
+### The `derivative_cutoff` hypothesis, tested and rejected
+
+Our `derivative_cutoff` is 6 Hz where the reference 1€ spec says ~1 Hz (the velocity estimator's
+own filter). The theory was that a noisier velocity estimate would inflate the cutoff and let
+tremor through. Measured:
+
+| rotation cutoff | d_cutoff 1.0 | d_cutoff 3.0 | d_cutoff 6.0 |
+|---|---|---|---|
+| 4.5 Hz | 45.6% | 46.1% | 46.5% |
+| 3.0 Hz | 33.4% | 33.9% | 34.4% |
+| 1.5 Hz | 18.3% | 19.0% | 19.6% |
+| 1.0 Hz | 12.6% | 13.3% | 13.9% |
+
+Under one percentage point. The hypothesis is **wrong** — 6 Hz is fine, and lowering it to the
+reference value would only add ~9 ms of movement-onset delay for no measurable rejection gain.
+
 ## 2. In-game jitter meter (built into the mod)
 
 Prints the right-hand rotation delta per `ovr_GetTrackingState` call, raw vs filtered, to
