@@ -49,17 +49,23 @@ Design rules that fell out of testing (see [README](../README.md#how-the-smoothi
 - **`dt` from QPC deltas telescoping** — the game polls in bursts from multiple threads; per-call
   deltas average out correctly over a second (details in the [tuning doc](TUNING.md)).
 
-## Open technical question: one filter, several prediction timelines
+## One filter, several prediction timelines
 
 `ovr_GetTrackingState(session, absTime, ...)` returns poses **predicted to `absTime`**. The game
 calls it from more than one thread, and different callers may pass different `absTime` values —
 so consecutive samples fed into the single filter state can come from *different prediction
 timelines*, not just tiny steps on one clock (the telescoping argument covers only the clock).
-The periodic log line prints `t=` (the `absTime` each call asked for) so this can be checked
-against real data. If the jitter meter ever shows odd behavior, the candidate fix is to key the
-filter state per calling thread (TLS), or to only filter the main game-thread call and pass the
-rest through raw. Not implemented yet — no observed symptom on the tested setup.
+Two things ship for this:
 
+1. **Diagnostics** - the periodic log line prints `t=` (the `absTime` the call asked for) and
+   `tid=` (the calling thread), and the jitter line adds the number of distinct polling threads
+   seen. So one session with the log answers it: if `t=` jumps between distinct values on
+   consecutive calls from different `tid`, the timelines really are mixed.
+2. **`per_thread_filters=1`** (default 0) - each calling thread keeps its own filters, clock and
+   session marker (`FilterState` + a small tid registry), so a filter only ever sees one timeline.
+   Cost: each thread then sees roughly half the samples, so the velocity estimate is a little
+   noisier - which is why it is opt-in and compared on the `jitter R-rot` line rather than enabled
+   blindly. Details and the decision table: [TUNING.md](TUNING.md).
 ## Layout validation
 
 Oculus struct sizes are `static_assert`-checked against the SDK bindings

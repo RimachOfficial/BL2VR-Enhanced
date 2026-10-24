@@ -68,6 +68,9 @@ struct Cfg {
     // catch-up: extra stiffness per metre / per radian of lag, used only by the HEAVY profiles
     // (trigger held or two-hand active). 0 = off = old behaviour.
     double catchPos, catchRot;
+    // 0 = one shared filter state (validated default). 1 = one state per calling thread, so
+    // threads that ask for poses at different absTime never mix prediction timelines.
+    int    perThread;
 };
 static Cfg  g_cfg = { 1, 1, 150, 1, 0, 4.5, 2.0, 6.0, 3.0, 1.5, 0.0, 1, 0.25, 2.0, 1.5,
                       2 /*zoomHand: 0=gun,1=offhand,2=either*/, 2.5, 2.0, 2.5,
@@ -75,7 +78,8 @@ static Cfg  g_cfg = { 1, 1, 150, 1, 0, 4.5, 2.0, 6.0, 3.0, 1.5, 0.0, 1, 0.25, 2.
                       0 /*twohandHand: 0=offhand,1=gun hand*/,
                       0.12, 0.75, 1.0,
                       0, 0, 0, 0,   // two-hand filter override: 0 = use the base/zoom profile
-                      0.0, 0.0 };   // defaults match the shipped bl2vr_grip.ini
+                      0.0, 0.0,     // catchup: 0 = off
+                      0 };          // perThread: 0 = one shared filter state (defaults match the shipped ini)
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
@@ -243,6 +247,9 @@ static void LoadCfg() {
     c.catchRot       = CfgD("catchup_rot", 0.0);
     if (c.catchPos < 0.0) c.catchPos = 0.0;
     if (c.catchRot < 0.0) c.catchRot = 0.0;
+    // one filter state per calling thread (see FilterState): fixes mixed prediction timelines
+    // when different game threads pass different absTime. 0 = the validated shared behaviour.
+    c.perThread = CfgI("per_thread_filters", 0) != 0 ? 1 : 0;
 
     // publish atomically: the hook threads snapshot g_cfg under the same lock
     EnterCriticalSection(&g_fcs);
@@ -250,17 +257,61 @@ static void LoadCfg() {
     LeaveCriticalSection(&g_fcs);
 }
 
-// ---------- smoothing state ----------
+// ---------- per-caller smoothing state ----------
+// Every filter, the filter clock, the session marker and the jitter meter belong to ONE caller.
+// When the game polls from several threads that is fine: they take turns on a shared clock and
+// the deltas telescope. But if those threads pass DIFFERENT absTime values, they are asking for
+// poses predicted to different horizons - and one shared state then mixes timelines: the pose
+// jumps forward for one call and back for the next, which reads as velocity the hand never had
+// and opens the filter. With per_thread_filters=1 each calling thread keeps its own state, so
+// every filter only ever sees one timeline. Default 0 = the validated single-state behaviour.
+struct FilterState {
+    OneEuroVec3   fpos[2];
+    OneEuroQuat   frot[2];
+    OneEuroVec3   fhead;
+    OneEuroVec3   stockLine;                 // virtual stock: the aim line's own low-pass
+    bool          stockWasActive = false;
+    LARGE_INTEGER lastQpc = {};
+    bool          clockValid = false;
+    void*         lastSession = nullptr;
+    // jitter meter: raw vs filtered right-hand rotation, per call
+    float         prevRawQ[4]  = { 0, 0, 0, 1 };
+    float         prevFiltQ[4] = { 0, 0, 0, 1 };
+    bool          prevQValid = false;
+    double        accRawDeg = 0.0, accFiltDeg = 0.0;
+    int           accN = 0;
+};
+
+static FilterState   g_state;                       // the single shared state (default)
+#define MAX_THREAD_STATES 8
+static FilterState   g_threadState[MAX_THREAD_STATES];
+static DWORD         g_threadId[MAX_THREAD_STATES] = { 0 };
+static int           g_threadN = 0;                 // slots handed out
+static volatile LONG g_threadsSeen = 0;
+static CRITICAL_SECTION g_tsscs;                    // guards the registry (init in the worker)
+
 static double        g_freq = 0.0;
-static LARGE_INTEGER g_lastQpc = {};
-static void*         g_lastSession = nullptr;
-static OneEuroVec3   g_fpos[2];
-static OneEuroQuat   g_frot[2];
-static OneEuroVec3   g_fhead;
-static OneEuroVec3   g_stockLine;            // virtual stock: the aim line's own low-pass
-static bool          g_stockWasActive = false;
 static volatile LONG g_calls = 0;
 static bool          g_dumped = false;
+
+// The state for THIS call: shared unless per_thread_filters is on, in which case each calling
+// thread gets its own slot (created on its first call, and logged with its tid).
+static FilterState* GetState(bool perThread) {
+    if (!perThread) return &g_state;
+    const DWORD tid = GetCurrentThreadId();
+    EnterCriticalSection(&g_tsscs);
+    for (int i = 0; i < g_threadN; i++) {
+        if (g_threadId[i] == tid) { LeaveCriticalSection(&g_tsscs); return &g_threadState[i]; }
+    }
+    int slot = -1;
+    if (g_threadN < MAX_THREAD_STATES) { slot = g_threadN++; g_threadId[slot] = tid; }
+    LeaveCriticalSection(&g_tsscs);
+    if (slot < 0) return &g_state;                  // registry full - share rather than leak
+    InterlockedIncrement(&g_threadsSeen);
+    Bl2Log("per-thread filter state: slot %d -> tid=%lu (distinct polling threads: %ld)",
+           slot, (unsigned long)tid, (long)g_threadsSeen);
+    return &g_threadState[slot];
+}
 
 // ---------- trigger gate ----------
 // Input state layout verified against the SDK bindings (ovr-sys / OVR_CAPI.h):
@@ -298,12 +349,8 @@ static bool              g_dumpedInput = false;
 
 // ---- jitter meter ----
 // Measures how much the right-hand ORIENTATION moves per call, raw vs after filtering.
-// That turns "feels smoother" into a number we can compare between settings.
-static float  g_prevRawQ[4]  = { 0, 0, 0, 1 };
-static float  g_prevFiltQ[4] = { 0, 0, 0, 1 };
-static bool   g_prevQValid = false;
-static double g_accRawDeg = 0.0, g_accFiltDeg = 0.0;
-static int    g_accN = 0;
+// That turns "feels smoother" into a number we can compare between settings. The counters
+// live in FilterState (they belong to one caller, like the filters themselves).
 
 static double QuatAngleDeg(const float* a, const float* b) {
     // Stable for tiny angles: build the relative rotation a * conj(b) and use atan2 on its
@@ -441,19 +488,24 @@ static void PollTrigger() {
     }
 }
 
-static double NowDt() {
+static double NowDt(FilterState& F) {
     LARGE_INTEGER now; QueryPerformanceCounter(&now);
-    double dt = (double)(now.QuadPart - g_lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
-    g_lastQpc = now;
+    if (!F.clockValid) {                  // first call on this state: seed, don't emit a bogus jump
+        F.lastQpc = now; F.clockValid = true;
+        return 1.0 / 90.0;                // neutral seed; with no filter history dt barely matters
+    }
+    double dt = (double)(now.QuadPart - F.lastQpc.QuadPart) / (g_freq > 0 ? g_freq : 1.0);
+    F.lastQpc = now;
     if (dt < 1e-4) dt = 1e-4;
     if (dt > 0.10) dt = 0.10;
     return dt;
 }
-static void ResetFilters() {
-    for (int h = 0; h < 2; h++) { g_fpos[h].reset(); g_frot[h].reset(); }
-    g_fhead.reset();
-    g_stockLine.reset();
-    g_stockWasActive = false;
+static void ResetFilters(FilterState& F) {
+    for (int h = 0; h < 2; h++) { F.fpos[h].reset(); F.frot[h].reset(); }
+    F.fhead.reset();
+    F.stockLine.reset();
+    F.stockWasActive = false;
+    F.prevQValid = false;                 // the jitter meter must not bridge a session change
 }
 
 // ---------------- virtual gunstock ----------------
@@ -485,7 +537,7 @@ static bool StockActive(const ovrTrackingState* st, const Cfg& cfg) {
 }
 
 // the solve - runs AFTER the hand filters, inside g_fcs
-static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld, const Cfg& cfg) {
+static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld, const Cfg& cfg, FilterState& F) {
     const int gun = cfg.gunHand, off = 1 - gun;
     ovrPoseStatef*       pg = &st->HandPoses[gun];
     const ovrPoseStatef* po = &st->HandPoses[off];
@@ -504,7 +556,7 @@ static void ApplyStock(ovrTrackingState* st, double dt, bool gateHeld, const Cfg
     if (sc < 1.0) sc = 1.0;
     if (sb < 0.0) sb = 0.0;
     float fDes[3];
-    g_stockLine.step(aim, dt, sc, sb, cfg.derivCutoff, 0.0, nullptr, fDes);
+    F.stockLine.step(aim, dt, sc, sb, cfg.derivCutoff, 0.0, nullptr, fDes);
     double ol = sqrt((double)fDes[0]*fDes[0] + (double)fDes[1]*fDes[1] + (double)fDes[2]*fDes[2]);
     if (ol < 1e-6) return;
     fDes[0] = (float)(fDes[0]/ol); fDes[1] = (float)(fDes[1]/ol); fDes[2] = (float)(fDes[2]/ol);
@@ -561,16 +613,20 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     ovrTrackingState* st = (ovrTrackingState*)retbuf;
     LONG c = InterlockedIncrement(&g_calls);
 
-    // ---- atomic snapshot under g_fcs: config + filter clock + session-change reset ----
+    // ---- atomic snapshot under g_fcs: config + per-caller state + filter clock/session ----
     // The hook can be called from more than one game thread, and LoadCfg() on our worker
     // thread rewrites g_cfg every ~2 s. Everything below reads this local copy (cfg, dt) -
     // never the globals - so no mixed old/new profile and no double-fed dt.
+    // F is this caller's filter state (shared by default; one per thread with
+    // per_thread_filters=1, so threads asking for different absTime never mix timelines).
     Cfg cfg;
     double dt;
+    FilterState* F = nullptr;
     {
         EnterCriticalSection(&g_fcs);
-        if (session != g_lastSession) { g_lastSession = session; ResetFilters(); }
-        dt = NowDt();
+        F = GetState(g_cfg.perThread != 0);      // read the global while locked -> consistent
+        if (session != F->lastSession) { F->lastSession = session; ResetFilters(*F); }
+        dt = NowDt(*F);
         cfg = g_cfg;
         LeaveCriticalSection(&g_fcs);
     }
@@ -647,11 +703,11 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     EnterCriticalSection(&g_fcs);
     if (doSmooth) {
         for (int h = 0; h < 2; h++) {
-            g_fpos[h].catchup = cPos;
-            g_frot[h].catchup = cRot;
+            F->fpos[h].catchup = cPos;
+            F->frot[h].catchup = cRot;
             ovrPoseStatef* ps = &st->HandPoses[h];
             if (!(st->HandStatusFlags[h] & STATUS_POSITION_TRACKED)) {
-                g_fpos[h].reset(); g_frot[h].reset();
+                F->fpos[h].reset(); F->frot[h].reset();
                 continue;
             }
             float p[3] = { ps->ThePose.Position.x,    ps->ThePose.Position.y,    ps->ThePose.Position.z };
@@ -659,19 +715,19 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
             float q[4] = { ps->ThePose.Orientation.x, ps->ThePose.Orientation.y,
                            ps->ThePose.Orientation.z, ps->ThePose.Orientation.w };
             float op[3], oq[4];
-            g_fpos[h].step(p, dt, mc,  bt,  cfg.derivCutoff,
+            F->fpos[h].step(p, dt, mc,  bt,  cfg.derivCutoff,
                            cfg.predictMs / 1000.0, v, op);
-            g_frot[h].step(q, dt, mcr, btr, cfg.derivCutoff, oq);
+            F->frot[h].step(q, dt, mcr, btr, cfg.derivCutoff, oq);
 
             if (h == HAND_RIGHT) {          // rotation noise: raw vs filtered
-                if (g_prevQValid) {
-                    g_accRawDeg  += QuatAngleDeg(q,  g_prevRawQ);
-                    g_accFiltDeg += QuatAngleDeg(oq, g_prevFiltQ);
-                    g_accN++;
+                if (F->prevQValid) {
+                    F->accRawDeg  += QuatAngleDeg(q,  F->prevRawQ);
+                    F->accFiltDeg += QuatAngleDeg(oq, F->prevFiltQ);
+                    F->accN++;
                 }
-                memcpy(g_prevRawQ,  q,  sizeof(g_prevRawQ));
-                memcpy(g_prevFiltQ, oq, sizeof(g_prevFiltQ));
-                g_prevQValid = true;
+                memcpy(F->prevRawQ,  q,  sizeof(F->prevRawQ));
+                memcpy(F->prevFiltQ, oq, sizeof(F->prevFiltQ));
+                F->prevQValid = true;
             }
 
             ps->ThePose.Position.x = op[0]; ps->ThePose.Position.y = op[1]; ps->ThePose.Position.z = op[2];
@@ -680,34 +736,34 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         }
     } else {
         // not smoothing right now - drop filter history so re-engaging doesn't snap
-        for (int h = 0; h < 2; h++) { g_fpos[h].reset(); g_frot[h].reset(); }
+        for (int h = 0; h < 2; h++) { F->fpos[h].reset(); F->frot[h].reset(); }
     }
     // virtual gunstock: the aim comes from the FILTERED hands, then the line itself is
     // low-passed once more (stock_cutoff) - a quick main-hand movement only leans the aim.
     // Runs inside the same lock as the filters (the hook can be called from two threads).
     if (g_twoHandActive) {
-        ApplyStock(st, dt, gateHeld, cfg);
-        g_stockWasActive = true;
-    } else if (g_stockWasActive) {
-        g_stockLine.reset();          // re-engaging the stock must not sweep across
-        g_stockWasActive = false;
+        ApplyStock(st, dt, gateHeld, cfg, *F);
+        F->stockWasActive = true;
+    } else if (F->stockWasActive) {
+        F->stockLine.reset();          // re-engaging the stock must not sweep across
+        F->stockWasActive = false;
     }
     LeaveCriticalSection(&g_fcs);
     if (cfg.enabled && cfg.smoothHead) {
         if (!(st->StatusFlags & STATUS_POSITION_TRACKED)) {
-            g_fhead.reset();
+            F->fhead.reset();
         } else {
             float p[3] = { st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z };
             float op[3];
-            g_fhead.step(p, dt, cfg.minCutoff, cfg.beta, cfg.derivCutoff, 0.0, nullptr, op);
+            F->fhead.step(p, dt, cfg.minCutoff, cfg.beta, cfg.derivCutoff, 0.0, nullptr, op);
             st->HeadPose.ThePose.Position.x = op[0];
             st->HeadPose.ThePose.Position.y = op[1];
             st->HeadPose.ThePose.Position.z = op[2];
         }
     }
     if (cfg.log && (c <= cfg.logFrames || (c % 120) == 0)) {
-        Bl2Log("#%ld dt=%.4f t=%.4f flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
-            c, dt, absTime, st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
+        Bl2Log("#%ld dt=%.4f t=%.4f tid=%lu flags=%u hf=%u/%u trig=%.2f grip=%.2f x%.0f/%.0f on=%d 2h=%d head=(%.3f %.3f %.3f) L=(%.3f %.3f %.3f) R=(%.3f %.3f %.3f) Rq=(%.3f %.3f %.3f %.3f)",
+            c, dt, absTime, (unsigned long)GetCurrentThreadId(), st->StatusFlags, st->HandStatusFlags[0], st->HandStatusFlags[1],
             trig, grip, mult, multRot, (int)doSmooth, g_twoHandActive,
             st->HeadPose.ThePose.Position.x, st->HeadPose.ThePose.Position.y, st->HeadPose.ThePose.Position.z,
             st->HandPoses[0].ThePose.Position.x, st->HandPoses[0].ThePose.Position.y, st->HandPoses[0].ThePose.Position.z,
@@ -718,11 +774,12 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
 
     // Periodic jitter report: how much the right-hand rotation actually moved per call,
     // before vs after our filter. This is the number that says whether it got smoother.
-    if (g_accN > 0 && (c % 120) == 0) {
-        Bl2Log("jitter R-rot: raw %.4f deg/call -> filtered %.4f deg/call  (%.1fx smoother, %d samples)",
-               g_accRawDeg / g_accN, g_accFiltDeg / g_accN,
-               (g_accFiltDeg > 1e-9 ? g_accRawDeg / g_accFiltDeg : 0.0), g_accN);
-        g_accRawDeg = 0.0; g_accFiltDeg = 0.0; g_accN = 0;
+    if (F->accN > 0 && (c % 120) == 0) {
+        Bl2Log("jitter R-rot: raw %.4f deg/call -> filtered %.4f deg/call  (%.1fx smoother, %d samples)  |  polling threads=%ld  per_thread=%d",
+               F->accRawDeg / F->accN, F->accFiltDeg / F->accN,
+               (F->accFiltDeg > 1e-9 ? F->accRawDeg / F->accFiltDeg : 0.0), F->accN,
+               (long)g_threadsSeen, cfg.perThread);
+        F->accRawDeg = 0.0; F->accFiltDeg = 0.0; F->accN = 0;
     }
 
     // Two-hand status + the axis calibration hint.
@@ -813,8 +870,10 @@ static bool InstallHook(void* target) {
 
 void InstallOvrHookThread() {
     InitializeCriticalSection(&g_fcs);
+    InitializeCriticalSection(&g_tsscs);          // per-thread filter-state registry
     { LARGE_INTEGER f; QueryPerformanceFrequency(&f); g_freq = (double)f.QuadPart; }
-    QueryPerformanceCounter(&g_lastQpc);
+    { LARGE_INTEGER t; QueryPerformanceCounter(&t);   // seed the shared state's clock
+      g_state.lastQpc = t; g_state.clockValid = true; }
 
     HMODULE self = nullptr;
     GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,

@@ -114,8 +114,28 @@ reverted; the two forms are functionally equivalent.)
 
 Related, and still open: `ovr_GetTrackingState` takes an `absTime` and returns poses *predicted
 to that time*. If different threads ask for different prediction horizons, one shared filter
-state is mixing timelines — the clock telescopes, the prediction horizon does not. See
-[ARCHITECTURE.md](ARCHITECTURE.md#open-technical-question-one-filter-several-prediction-timelines).
+state is mixing timelines — the clock telescopes, the prediction horizon does not.
+
+### `per_thread_filters` — one filter state per calling thread
+
+Default **0** (shared state, the validated behaviour). Set to **1** when the log says the
+timelines are mixed: you are looking for the periodic `#N dt=... t=... tid=...` lines and the
+`jitter R-rot: ... | polling threads=N` line.
+
+| In `openvr_proxy.log` | Meaning | Action |
+|---|---|---|
+| `t=` moves smoothly, one `tid=` (or several `tid=` sharing one `t=` progression) | one prediction timeline | leave `per_thread_filters=0` |
+| `t=` jumps between distinct values on consecutive calls with different `tid=` | threads ask for different horizons; a shared state mixes them | try `1`, compare the jitter line |
+
+Why it can help: with a shared state, each call that asks for a different horizon makes the pose
+jump forward and back in time. The filter reads that as velocity the hand never had, the cutoff
+opens, and the aim gets livelier than you asked for. Per-thread state keeps each filter on one
+timeline.
+
+Why it is not the default: each thread then sees roughly half the samples (the calls interleave),
+so each filter's velocity estimate is a little noisier. Both settings are measurable — the
+`jitter R-rot` line prints raw vs filtered deg/call — so keep whichever is calmer. The panel has
+it under **Smoothing → Advanced**.
 
 ## Two-hand filter override keys (optional)
 

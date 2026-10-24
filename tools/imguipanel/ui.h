@@ -314,6 +314,10 @@ static void PageSmoothing(IniFile& ini) {
     FloatKey(ini, "min_cutoff_rot", "Rotation cutoff (Hz)", "Rotation steadiness - the knob that matters for aiming.", 0.1f, 30.0f);
     FloatKey(ini, "beta_rot", "Rotation beta", "How fast the aim opens up when you turn.", 0.0f, 20.0f);
     FloatKey(ini, "predict_ms", "Prediction (ms)", "Extra lookahead. Keep 0 - prediction is the one thing that can overshoot.", 0.0f, 100.0f, "%.1f");
+
+    SectionHeader("Advanced");
+    BoolKey(ini, "per_thread_filters", "Per-thread filter state",
+            "Give each calling thread its own filters + clock. Turn ON only if openvr_proxy.log shows 't=' jumping between different times with different tids - that means the game asks for poses at different prediction horizons and one shared filter would mix timelines. Cost: each thread sees about half the samples, so the velocity estimate is a little noisier. Compare the 'jitter R-rot' line with it OFF and ON.");
 }
 
 static void PageTrigger(IniFile& ini) {
@@ -379,7 +383,7 @@ static void PageAbout() {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("About"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR.");
     SectionHeader("Mod");
-    ImGui::BulletText("Version 0.1.3");
+    ImGui::BulletText("Version 0.1.4");
     ImGui::BulletText("GPL-3.0 - free to use, share and improve");
     ImGui::BulletText("No game files are modified; Remove restores the stock game");
     ImGui::BulletText("Launch through Virtual Desktop (Oculus runtime path)");

@@ -6,6 +6,25 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-10-23
+
+### Added
+- **`per_thread_filters` (default 0)** — one filter state (`FilterState`: filters, clock, session
+  marker, jitter counters) per calling thread, so threads that ask for poses at different
+  `absTime` values can never mix prediction timelines. Opt-in and measured rather than switched
+  on blindly: each thread then sees about half the samples, so the velocity estimate is a little
+  noisier. The panel exposes it under **Smoothing → Advanced**, with the decision table in
+  [docs/TUNING.md](docs/TUNING.md).
+- Thread diagnostics: the periodic log line now carries `tid=`, and the jitter line reports how
+  many distinct polling threads were seen — together with `t=` that answers whether the game
+  really asks for different prediction horizons.
+
+### Changed
+- README results table states the tremor/lag tradeoff openly (current tuning keeps ~10% of tremor
+  vs the old ~5%, in exchange for 7.7× less lag); new **Compatibility** section declares what is
+  tested (one setup) vs untested (Link/Rift, SteamVR) plus the unsigned-binary/antivirus notes;
+  deep filter content split out to `docs/TUNING.md`; `ovr_proxy/` moved to `tools/ovr_proxy_legacy/`.
+
 ## [0.1.3] — 2026-10-23
 
 ### Added
