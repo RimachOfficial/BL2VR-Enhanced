@@ -6,6 +6,36 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.7] — 2026-10-24
+
+Verified in game. **No behaviour changes** — the filter logic is exactly v0.1.6; this release
+records the verification, adds the tools that produced it, and bumps the panel's version string so
+the About page matches the tag. If you already run v0.1.6 you do not need to re-download.
+
+### Added
+- `tools/analyze_log.ps1` — turns `openvr_proxy.log` into the numbers behind the docs: distinct
+  polling threads, `t-backwards` rate, `dt` distribution, and the jitter meter grouped by the live
+  filter profile. Reproducible verification of the bugs fixed in 0.1.6.
+- `docs/METRICS.md` §2 — real-session statistics.
+
+### Fixed
+- `tools/filter_bench.cpp` did not compile with MSVC (`grid_main_unused` was missing a return,
+  C4716) despite the file documenting an MSVC command line. Dead function made `static` and fixed.
+
+### Changed
+- Corrected an inflated headline: the "3.3× smoother" figure was measured while the
+  mixed-timeline bug was live, so the *raw* per-call delta was inflated by backwards jumps. The
+  verified post-fix numbers are 1.6–2.3× across the normal profiles and 7.6× at Locked + trigger;
+  README and METRICS now quote those.
+
+### Verification results (2026-10-24 session, v0.1.6 binaries)
+- `t-backwards`: **44% → 0.03%** (18 of 71,938 samples) — the mixed-timeline fix works.
+- 2 polling threads confirmed; `dt` average 14.15 ms per state (70.7 Hz per state, ~141 Hz total),
+  minimum 1.6 ms — the 1e-4 clamp floor is no longer spammed.
+- Profile suppression now scales with the cutoff: Responsive 1.62×, Default 1.72×, Hybrid 1.91×,
+  Steady 2.25×, Locked 2.29×, **Locked + trigger 7.59×** (raw 0.034 → 0.008 °/call).
+- 207 trigger-gate flips, 590 jitter reports, 71,938 samples analysed.
+
 ## [0.1.6] — 2026-10-23
 
 ### Fixed

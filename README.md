@@ -24,7 +24,7 @@
 | | Unmodded | With the mod |
 |---|---|---|
 | **Grip** | One-hand aim only | Two-handed virtual gunstock, hold `grip` to engage, hands free to slide |
-| **Aim stability** | Raw controller tremor on every shot | One Euro filtering — right-hand rotation moves **3.3× less** per call (measured in the live log, not a feel claim) |
+| **Aim stability** | Raw controller tremor on every shot | One Euro filtering — right-hand rotation per call drops from 0.383° to 0.279° at the Default profile, and by 7.6× with the trigger held on the Locked profile (measured in a real session log, reproducibly via `tools/analyze_log.ps1`) |
 | **Zoom/ADS feel** | Nothing changes when aiming | Trigger makes the stock progressively heavier (1 Hz floor) |
 | **Install** | — | 2 files + a panel; no game-file edits, reversible |
 
@@ -217,6 +217,8 @@ version / controller. There is a built-in helper:
 | Config panel (`bl2vr_panel.exe`) | MSVC, x64 | `tools\imguipanel\build.bat` |
 | Offline filter bench | any C++17 compiler (g++/MSVC) | see [docs/METRICS.md](docs/METRICS.md) |
 | Tremor sweep (`tools/tremor_sweep.cpp`) | any C++17 compiler | `g++ -O2 -std=c++17 -I openvr_proxy tools/tremor_sweep.cpp -o tremor_sweep` |
+| Catch-up demo (`tools/catchup_demo.cpp`) | any C++17 compiler | `cl /O2 /EHsc /std:c++17 tools\catchup_demo.cpp` |
+| Log analysis (`tools/analyze_log.ps1`) | PowerShell (no build) | `powershell -File tools\analyze_log.ps1` |
 
 MinHook is vendored under `third_party\minhook-master\` (BSD-3-Clause); ImGui (MIT) under
 `tools\imguipanel\imgui\`. No package manager needed. `tools\ovr_proxy_legacy\` is the abandoned

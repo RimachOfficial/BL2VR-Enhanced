@@ -31,7 +31,7 @@ static M measure(bool rot,double mc,double beta,double c){
   filt(rot,mc,beta,c,raw,out); double sr=0,so=0; for(size_t i=(size_t)(2*HZ);i<raw.size();i++){sr+=raw[i]*raw[i];so+=out[i]*out[i];} m.keep=100*sqrt(so/sr);
   return m;
 }
-int grid_main_unused(int argc,char**argv){
+static int grid_main_unused(int argc,char**argv){
   bool rot = argc>1 && atoi(argv[1])==1;
   double units = rot?1:1; (void)units;
   printf("%s grid. columns: mc(Hz) beta catchup | lag slow, lag fast | tail<0.5 | 2-step t90 | tremor kept%%\n", rot?"ROTATION (deg, per radian catchup)":"POSITION (cm, per metre catchup)");
@@ -41,6 +41,7 @@ int grid_main_unused(int argc,char**argv){
     M m=measure(rot,mc,b,c);
     printf("%4.2f %4.1f %5.0f | %5.2f %5.2f | %4.2f | %4.2f | %5.1f\n",mc,b,c,m.lagSlow,m.lagFast,m.tail05,m.t90,m.keep);
   }
+  return 0;
 }
 
 struct Row{const char*n;bool rot;double mc,b,c;};

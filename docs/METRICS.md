@@ -129,7 +129,55 @@ was held**, i.e. exactly when the player wants maximum steadiness.
 So holding the trigger made the aim **~6× rougher**, not steadier. Fixed in v0.1.6: catch-up is
 skipped entirely while the trigger is held, and the profile values dropped from 80–160 to 0–30.
 
-## 2. In-game jitter meter (built into the mod)
+## 2. Verified in game — real session statistics (v0.1.6)
+
+Reproduce with `powershell -File tools/analyze_log.ps1` on `openvr_proxy.log` (1.0 MB session,
+3 afk/aim segments, 14 distinct profile states exercised).
+
+### The timeline fix, confirmed
+
+| metric | with one shared state (v0.1.5) | with per-thread state (v0.1.6) |
+|---|---|---|
+| `t` went **backwards** between consecutive samples | **1449 / 3325 = 44%** | **18 / 71938 = 0.03%** |
+| distinct polling threads | 2 | 2 |
+| `dt` minimum | 0.0001 (clamp floor, spammed) | 0.0016 |
+| `dt` average | 0.0065 | 0.01415 (**70.7 Hz per state**, ~141 Hz total) |
+
+The reviewer's multi-timeline hypothesis is therefore **confirmed on hardware, not just in theory**,
+and the fix works. `t-backwards` is now the regression test for it.
+
+### Do profiles actually differ now? Yes — monotonically
+
+This is the number that answers "I change profiles and see no difference". Filtered vs raw
+rotation per call, grouped by the live `prof=` values from the log (rot cutoff in bold):
+
+| profile (rot cutoff) | reports | samples | smoother-x | raw °/call | filtered °/call |
+|---|---|---|---|---|---|
+| Responsive (**6.0** Hz) | 70 | 9035 | 1.62 | 0.333 | 0.223 |
+| Default (**3.0** Hz) | 130 | 23389 | 1.72 | 0.383 | 0.279 |
+| Hybrid (**2.25** Hz) | 35 | 2160 | 1.91 | 0.356 | 0.240 |
+| Steady (**1.0** Hz) | 56 | 7837 | 2.25 | 0.784 | 0.534 |
+| Locked (**0.8** Hz) | 82 | 15061 | 2.29 | 0.443 | 0.273 |
+| **Locked + trigger (0.4 Hz)** | 40 | 2400 | **7.59** | 0.034 | 0.008 |
+
+Suppression rises as the cutoff falls, and the trigger-held case is far out in front — i.e. the
+ADS "steady now" behaviour is working, and the profile ordering is real rather than noise.
+
+> **Correction to an earlier headline.** The "3.3× smoother" figure quoted in earlier docs/README
+> was taken while the mixed-timeline bug was live: the *raw* per-call delta was inflated by the
+> backwards jumps, so the ratio looked better than the filter really was. The honest post-fix
+> numbers are in the table above (1.6–2.3× across normal profiles, 7.6× at Locked + trigger).
+> Absolute residual motion is what matters: 0.383 → 0.279 °/call at Default.
+
+### Session totals
+
+| | |
+|---|---|
+| trigger-gate flips | 207 |
+| jitter reports logged | 590 |
+| samples analysed | 71,938 |
+
+## 3. In-game jitter meter (built into the mod)
 
 Prints the right-hand rotation delta per `ovr_GetTrackingState` call, raw vs filtered, to
 `openvr_proxy.log`. Evidence from the dt-bug investigation:
@@ -139,7 +187,7 @@ Prints the right-hand rotation delta per `ovr_GetTrackingState` call, raw vs fil
 - After: real smoothing at the configured cutoffs; `dt=` in the log reads ~0.005–0.006 s
   (game poll interval ~180 Hz: 120 calls / 0.667 s measured).
 
-## 3. Functional checks (log lines)
+## 4. Functional checks (log lines)
 
 | Check | Expected in `openvr_proxy.log` |
 |---|---|
