@@ -158,7 +158,7 @@ all of this with tooltips; the raw keys if you want them:
 | `min_cutoff_rot` | 3.0 | rotation cutoff (Hz) — the knob that matters for aiming |
 | `beta_rot` | 1.5 | rotation equivalent of `beta` |
 | `predict_ms` | 0 | extra lookahead — keep 0 (prediction is the one thing that can overshoot) |
-| `per_thread_filters` | 0 | advanced: one filter state per calling thread (see [TUNING](docs/TUNING.md#per_thread_filters--one-filter-state-per-calling-thread)) |
+| `per_thread_filters` | 1 | one filter state per calling thread — **leave on**; the game interleaves two threads with offset prediction times ([why](docs/METRICS.md#1c-why-the-smoothing-seemed-weak-mixed-prediction-timelines-measured)) |
 
 ### Zoom (trigger) gate
 | Key | Default | Meaning |

@@ -317,7 +317,7 @@ static void PageSmoothing(IniFile& ini) {
 
     SectionHeader("Advanced");
     BoolKey(ini, "per_thread_filters", "Per-thread filter state",
-            "Give each calling thread its own filters + clock. Turn ON only if openvr_proxy.log shows 't=' jumping between different times with different tids - that means the game asks for poses at different prediction horizons and one shared filter would mix timelines. Cost: each thread sees about half the samples, so the velocity estimate is a little noisier. Compare the 'jitter R-rot' line with it OFF and ON.");
+            "ON by default (measured on the tested setup). The game polls tracking from two threads whose absTime values are offset by about one frame, so with a shared state the pose steps BACKWARDS on ~half of all calls: the raw derivative then reports fake velocity, the adaptive cutoff opens fully, and smoothing effectively disappears - which also makes profile changes look like they do nothing. The log's jitter line reports 't-backwards=' - it should be ~0 with this ON. Turn OFF only to reproduce the old behaviour for comparison.");
 }
 
 static void PageTrigger(IniFile& ini) {
@@ -375,15 +375,15 @@ static void PageGunstock(IniFile& ini) {
     FloatKey(ini, "twohand_beta_rot", "Rotation beta##2h", "How fast the rotation filter opens up when you turn while two-handing. 0 = use the base profile.", 0.0f, 20.0f);
 
     SectionHeader("Catch-up (0 = off)");
-    FloatKey(ini, "catchup_pos", "Position", "Extra stiffness per metre of lag. Kills a big lag without touching a small tremor.", 0.0f, 1000.0f, "%.0f");
-    FloatKey(ini, "catchup_rot", "Rotation", "Same, per radian of lag.", 0.0f, 1000.0f, "%.0f");
+    FloatKey(ini, "catchup_pos", "Position", "Extra stiffness per metre of lag (0 = off). It cuts lag by opening the filter, so it always costs smoothing, and it is skipped while the trigger is held. Keep it small (0-30).", 0.0f, 100.0f, "%.0f");
+    FloatKey(ini, "catchup_rot", "Rotation", "Same, per radian of lag. Measured: at 60 deg/s, 150 raised the effective cutoff 0.4 -> 5.2 Hz, so tremor pass-through went 10%% -> 60%%. Keep it small (0-30).", 0.0f, 100.0f, "%.0f");
 }
 
 static void PageAbout() {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("About"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR.");
     SectionHeader("Mod");
-    ImGui::BulletText("Version 0.1.5");
+    ImGui::BulletText("Version 0.1.6");
     ImGui::BulletText("GPL-3.0 - free to use, share and improve");
     ImGui::BulletText("No game files are modified; Remove restores the stock game");
     ImGui::BulletText("Launch through Virtual Desktop (Oculus runtime path)");

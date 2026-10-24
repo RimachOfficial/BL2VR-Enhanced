@@ -6,6 +6,32 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.6] — 2026-10-23
+
+### Fixed
+- **The trigger no longer undoes the smoothing.** Catch-up (`catchup_rot/pos`) works by *opening*
+  the filter to cut lag, so it trades smoothing away — and it was being applied while the trigger
+  was held, i.e. exactly when you want maximum steadiness. Measured with `tools/catchup_demo.cpp`:
+  sweeping at 60°/s with the trigger held, `catchup_rot 150` pushed the effective cutoff from
+  0.4 Hz to 5.2 Hz (tremor pass-through ~10% → ~60%). Catch-up is now skipped while the trigger is
+  held, and the profile values dropped from 80–160 to 0–30.
+- **`per_thread_filters` now defaults to 1**, because the shared state was measurably broken on
+  the tested setup: the game polls tracking from **two threads whose `absTime` values are offset by
+  about one frame**, interleaved. A single shared filter therefore received the pose *stepping
+  backwards* on **44% of calls (1449/3325 samples, jumps back up to 0.58 s)**. The raw derivative —
+  with `dt` at the 1e-4 clamp floor — then reported fake velocity of tens of m/s, which opened the
+  adaptive cutoff completely. Two consequences, both reported by the player: smoothing appeared to
+  switch off, and profile changes appeared to do nothing (`min_cutoff` is irrelevant next to a
+  ~60 Hz fake velocity term). Per-thread state gives every filter one monotonic timeline.
+
+### Added
+- `tools/catchup_demo.cpp` — solves the catch-up steady state and shows the effective cutoff and
+  tremor pass-through for a given aim speed, cutoff and catch-up value.
+- The jitter log line now reports `t-backwards=N/M` (samples whose `absTime` went backwards on that
+  state) and the periodic line carries `tid=`, so the timeline question is answered by the log.
+- "polling thread seen: tid=…" is logged for every distinct calling thread, in both modes (the
+  counter is no longer silently zero when per-thread state is off).
+
 ## [0.1.5] — 2026-10-23
 
 ### Added

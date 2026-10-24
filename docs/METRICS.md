@@ -85,6 +85,50 @@ tremor through. Measured:
 Under one percentage point. The hypothesis is **wrong** — 6 Hz is fine, and lowering it to the
 reference value would only add ~9 ms of movement-onset delay for no measurable rejection gain.
 
+## 1c. Why the smoothing seemed weak: mixed prediction timelines (measured)
+
+The game polls `ovr_GetTrackingState` from **two threads** whose `absTime` values are offset by
+about one frame and interleaved. From a real session log (sampled lines only):
+
+```
+t=2593.7865  dt=0.0122  tid=28368   <- thread B, predicted to t
+t=2593.7727  dt=0.0001  tid=25120   <- thread A, predicted to t-14ms (one frame BACK)
+t=2593.8004  dt=0.0155  tid=28368   <- B
+t=2593.7865  dt=0.0001  tid=25120   <- A, equal to B's PREVIOUS value
+```
+
+With **one shared filter state**, the pose it receives therefore steps *backwards* on roughly
+half of all calls. Measured on the full log: **`t` went backwards on 1449 of 3325 samples (44%)**,
+with jumps back of up to 0.58 s. The raw derivative `(x - x_prev)/dt` then reports velocity the
+hand never had — and because `dt` for those calls sits at the 1e-4 clamp floor, the number is
+enormous (tens of m/s). The adaptive cutoff is `min_cutoff + beta*|v|`, so:
+
+- the filter opens completely → **no smoothing**, exactly the "smoothing seems off" report;
+- `min_cutoff` becomes irrelevant next to the fake velocity term → **profile changes look like
+  they do nothing** (0.4 Hz vs 4.5 Hz makes no difference when `beta*|v|` is ~60 Hz).
+
+Fix: `per_thread_filters=1` (default since v0.1.6) gives each calling thread its own filters and
+clock, so each filter only ever sees one monotonic timeline. The jitter line now reports
+`t-backwards=N/M`; it was ~44% with a shared state and should be ~0 per thread.
+
+## 1d. Why the trigger felt like it switched smoothing OFF
+
+Profiles set a `catchup` term (extra stiffness per radian of lag). Catch-up works by *opening*
+the filter, so it directly trades smoothing away — and it used to be applied **while the trigger
+was held**, i.e. exactly when the player wants maximum steadiness.
+
+`tools/catchup_demo.cpp` solves the steady state `lag = ω / (2π(f₀ + catchup·lag))`:
+
+| aim speed | profile | catchup | effective cutoff | tremor passed |
+|---|---|---|---|---|
+| 60°/s | 0.8 Hz | 0 | 0.80 Hz | ~10% |
+| 60°/s | 0.8 Hz | 150 | 5.42 Hz | ~60% |
+| 60°/s | **0.4 Hz (trigger held)** | 0 | 0.40 Hz | ~10% |
+| 60°/s | **0.4 Hz (trigger held)** | 150 | **5.20 Hz** | **~60%** |
+
+So holding the trigger made the aim **~6× rougher**, not steadier. Fixed in v0.1.6: catch-up is
+skipped entirely while the trigger is held, and the profile values dropped from 80–160 to 0–30.
+
 ## 2. In-game jitter meter (built into the mod)
 
 Prints the right-hand rotation delta per `ovr_GetTrackingState` call, raw vs filtered, to

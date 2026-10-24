@@ -79,7 +79,10 @@ static Cfg  g_cfg = { 1, 1, 150, 1, 0, 4.5, 2.0, 6.0, 3.0, 1.5, 0.0, 1, 0.25, 2.
                       0.12, 0.75, 1.0,
                       0, 0, 0, 0,   // two-hand filter override: 0 = use the base/zoom profile
                       0.0, 0.0,     // catchup: 0 = off
-                      0 };          // perThread: 0 = one shared filter state (defaults match the shipped ini)
+                      1 };          // perThread: 1 = one filter state per calling thread (measurably required
+                                    // on the tested setup: the game polls from 2 threads whose absTime values
+                                    // are offset ~1 frame, so a shared state sees the pose step backwards
+                                    // on ~half of all calls and the velocity estimate explodes)
 
 // the six candidate barrel axes of the gun hand, in hand-local space
 static const float kAxes[6][3] = {
@@ -261,9 +264,12 @@ static void LoadCfg() {
     c.catchRot       = CfgD("catchup_rot", 0.0);
     if (c.catchPos < 0.0) c.catchPos = 0.0;
     if (c.catchRot < 0.0) c.catchRot = 0.0;
-    // one filter state per calling thread (see FilterState): fixes mixed prediction timelines
-    // when different game threads pass different absTime. 0 = the validated shared behaviour.
-    c.perThread = CfgI("per_thread_filters", 0) != 0 ? 1 : 0;
+    // one filter state per calling thread (see FilterState). The measured default on the tested
+    // setup is ON: the game polls from two threads whose absTime values are offset by about one
+    // frame, so with a shared state the pose steps BACKWARDS on ~half of all calls - the raw
+    // derivative then reports tens of m/s of fake velocity and the adaptive cutoff opens fully
+    // (smoothing effectively off, and min_cutoff/profile changes stop mattering).
+    c.perThread = CfgI("per_thread_filters", 1) != 0 ? 1 : 0;
 
     // publish atomically: the hook threads snapshot g_cfg under the same lock
     EnterCriticalSection(&g_fcs);
@@ -294,6 +300,12 @@ struct FilterState {
     bool          prevQValid = false;
     double        accRawDeg = 0.0, accFiltDeg = 0.0;
     int           accN = 0;
+    // timeline sanity: the game interleaves calls from two threads whose absTime values are
+    // offset by about one frame, so a SHARED state sees the pose step backwards every second
+    // call. Counting those backwards steps is how we prove whether the fix is needed/working.
+    double        prevT = 0.0;
+    bool          tValid = false;
+    int           tBack = 0, tN = 0;
 };
 
 static FilterState   g_state;                       // the single shared state (default)
@@ -310,21 +322,30 @@ static bool          g_dumped = false;
 
 // The state for THIS call: shared unless per_thread_filters is on, in which case each calling
 // thread gets its own slot (created on its first call, and logged with its tid).
+// The tid registry is maintained in BOTH modes so the diagnostics stay honest, but in shared
+// mode every caller still reads/writes g_state.
 static FilterState* GetState(bool perThread) {
-    if (!perThread) return &g_state;
     const DWORD tid = GetCurrentThreadId();
+    int slot = -1;
+    bool isNew = false;
     EnterCriticalSection(&g_tsscs);
     for (int i = 0; i < g_threadN; i++) {
-        if (g_threadId[i] == tid) { LeaveCriticalSection(&g_tsscs); return &g_threadState[i]; }
+        if (g_threadId[i] == tid) { slot = i; break; }
     }
-    int slot = -1;
-    if (g_threadN < MAX_THREAD_STATES) { slot = g_threadN++; g_threadId[slot] = tid; }
+    if (slot < 0 && g_threadN < MAX_THREAD_STATES) {
+        slot = g_threadN++;
+        g_threadId[slot] = tid;
+        isNew = true;
+    }
     LeaveCriticalSection(&g_tsscs);
-    if (slot < 0) return &g_state;                  // registry full - share rather than leak
-    InterlockedIncrement(&g_threadsSeen);
-    Bl2Log("per-thread filter state: slot %d -> tid=%lu (distinct polling threads: %ld)",
-           slot, (unsigned long)tid, (long)g_threadsSeen);
-    return &g_threadState[slot];
+
+    if (isNew) {
+        InterlockedIncrement(&g_threadsSeen);
+        Bl2Log("polling thread seen: tid=%lu (distinct so far: %ld)  per_thread=%d",
+               (unsigned long)tid, (long)g_threadsSeen, (int)(perThread ? 1 : 0));
+    }
+    if (!perThread) return &g_state;
+    return (slot >= 0) ? &g_threadState[slot] : &g_state;
 }
 
 // ---------- trigger gate ----------
@@ -641,6 +662,11 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         F = GetState(g_cfg.perThread != 0);      // read the global while locked -> consistent
         if (session != F->lastSession) { F->lastSession = session; ResetFilters(*F); }
         dt = NowDt(*F);
+        // count samples whose absTime is EARLIER than the previous one on this state: with a
+        // shared state that happens on ~half of all calls (two threads, offset by one frame),
+        // and it is what poisons the velocity estimate. Should go to ~0 with per-thread state.
+        if (F->tValid) { F->tN++; if (absTime < F->prevT - 1e-6) F->tBack++; }
+        F->prevT = absTime; F->tValid = true;
         cfg = g_cfg;
         LeaveCriticalSection(&g_fcs);
     }
@@ -709,10 +735,14 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
         btr = cfg.betaRot / multRot;
     }
 
-    // catch-up only for the heavy profiles, so the light base profile keeps its current feel
-    const bool heavy = gateHeld || (g_twoHandActive != 0);
-    const double cPos = heavy ? cfg.catchPos : 0.0;
-    const double cRot = heavy ? cfg.catchRot : 0.0;
+    // catch-up reduces lag by OPENING the filter - which is exactly what you do not want while
+    // aiming down sights. Measured with tools/catchup_demo.cpp: sweeping at 60 deg/s with the
+    // trigger held, catchup 150 pushed the effective cutoff from 0.4 Hz to 5.2 Hz, i.e. tremor
+    // pass-through went from ~10% to ~60%. The trigger is meant to make the aim steadier, so
+    // catch-up applies only when the trigger is NOT held.
+    const bool catchupOk = !gateHeld;
+    const double cPos = catchupOk ? cfg.catchPos : 0.0;
+    const double cRot = catchupOk ? cfg.catchRot : 0.0;
 
     EnterCriticalSection(&g_fcs);
     if (doSmooth) {
@@ -789,11 +819,12 @@ static void* Hook_GetTrackingState(void* retbuf, void* session, double absTime, 
     // Periodic jitter report: how much the right-hand rotation actually moved per call,
     // before vs after our filter. This is the number that says whether it got smoother.
     if (F->accN > 0 && (c % 120) == 0) {
-        Bl2Log("jitter R-rot: raw %.4f deg/call -> filtered %.4f deg/call  (%.1fx smoother, %d samples)  |  polling threads=%ld  per_thread=%d",
+        Bl2Log("jitter R-rot: raw %.4f deg/call -> filtered %.4f deg/call  (%.1fx smoother, %d samples)  |  threads=%ld  per_thread=%d  t-backwards=%d/%d",
                F->accRawDeg / F->accN, F->accFiltDeg / F->accN,
                (F->accFiltDeg > 1e-9 ? F->accRawDeg / F->accFiltDeg : 0.0), F->accN,
-               (long)g_threadsSeen, cfg.perThread);
+               (long)g_threadsSeen, cfg.perThread, F->tBack, F->tN);
         F->accRawDeg = 0.0; F->accFiltDeg = 0.0; F->accN = 0;
+        F->tBack = 0; F->tN = 0;
     }
 
     // Two-hand status + the axis calibration hint.

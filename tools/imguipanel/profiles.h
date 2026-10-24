@@ -36,7 +36,7 @@ inline Profile kProfiles[] = {
         {"trigger_gate",1.0f}, {"trigger_threshold",0.25f}, {"zoom_mult",3.0f}, {"zoom_mult_rot",1.0f},
         {"twohand_min_cutoff",2.0f}, {"twohand_beta",1.0f},
         {"twohand_min_cutoff_rot",1.0f}, {"twohand_beta_rot",0.5f},
-        {"catchup_pos",90.0f}, {"catchup_rot",80.0f},
+        {"catchup_pos",25.0f}, {"catchup_rot",20.0f},
         {"stock_cutoff",1.5f}, {"stock_beta",1.0f}, {"stock_zoom_mult",1.5f} } },
 
     { "Hybrid", "The middle path: noticeably steadier than Default, still quick to follow "
@@ -66,7 +66,7 @@ inline Profile kProfiles[] = {
         {"trigger_gate",1.0f}, {"trigger_threshold",0.25f}, {"zoom_mult",4.0f}, {"zoom_mult_rot",2.5f},
         {"twohand_min_cutoff",2.5f}, {"twohand_beta",1.2f},
         {"twohand_min_cutoff_rot",1.5f}, {"twohand_beta_rot",0.8f},
-        {"catchup_pos",80.0f}, {"catchup_rot",70.0f},
+        {"catchup_pos",25.0f}, {"catchup_rot",20.0f},
         {"stock_cutoff",1.5f}, {"stock_beta",0.8f}, {"stock_zoom_mult",2.0f} } },
 
     { "Locked", "Precision experiment. Uses cutoffs BELOW the project's normal 1 Hz floor (~10% of "
@@ -78,7 +78,7 @@ inline Profile kProfiles[] = {
         {"trigger_gate",1.0f}, {"trigger_threshold",0.25f}, {"zoom_mult",3.0f}, {"zoom_mult_rot",2.0f},
         {"twohand_min_cutoff",1.2f}, {"twohand_beta",0.4f},
         {"twohand_min_cutoff_rot",0.8f}, {"twohand_beta_rot",0.3f},
-        {"catchup_pos",160.0f}, {"catchup_rot",150.0f},
+        {"catchup_pos",30.0f}, {"catchup_rot",25.0f},
         {"stock_cutoff",1.0f}, {"stock_beta",0.6f}, {"stock_zoom_mult",1.2f} } },
 };
 inline const int kProfileCount = sizeof(kProfiles) / sizeof(kProfiles[0]);
