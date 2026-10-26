@@ -383,7 +383,7 @@ static void PageAbout() {
     ImGui::PushFont(g_fonts.title); ImGui::TextUnformatted("About"); ImGui::PopFont();
     ImGui::TextColored(kTextDim, "Two-handed virtual gunstock + motion smoothing for Borderlands 2 VR.");
     SectionHeader("Mod");
-    ImGui::BulletText("Version 0.1.7");
+    ImGui::BulletText("Version 0.1.8");
     ImGui::BulletText("GPL-3.0 - free to use, share and improve");
     ImGui::BulletText("No game files are modified; Remove restores the stock game");
     ImGui::BulletText("Launch through Virtual Desktop (Oculus runtime path)");

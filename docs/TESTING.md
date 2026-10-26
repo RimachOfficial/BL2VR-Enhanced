@@ -1,6 +1,23 @@
 # Testing — verify a build works
 
-No unit-test suite in the game-loop sense (it hooks a shipping game); verification is layered.
+The hooked game loop can only be exercised in the game, but every pure function has unit
+tests. Verification is layered.
+
+## 0. Unit tests (no game, no headset) — `tests\run_tests.bat`
+
+```
+tests\run_tests.bat
+```
+
+Builds and runs two suites with MSVC (exit code 0 = all green; also run in CI):
+
+| Suite | Covers |
+|---|---|
+| `tests\test_filters.cpp` | `filters.h`: OneEuroAlpha, OneEuroVec3, OneEuroQuat — init passthrough, dt floor, lag/cutoff/catchup behaviour, tremor attenuation, quaternion sign flips, reset |
+| `tests\test_ovrhook.cpp` | `ovrhook.cpp`: INI parser + full LoadCfg mapping/clamps, all quaternion maths (QuatMul / QuatRotateVec / QuatFromTo / SlerpQ / QuatAngleDeg), the stock solve (StockActive / ApplyStock), PollTrigger incl. the positive-rc OVR_SUCCESS regression, and the **full hook pipeline through a fake trampoline** (trigger gate, zoom_hand selection, zoom weight, head smoothing, session resets), GetState / NowDt / ResetFilters / InstallHook |
+
+Not covered (by design): `InstallOvrHookThread` (blocks forever waiting on the game),
+`proxy.cpp`'s 14 export forwards (covered by launching the game), and the ImGui panel UI.
 
 ## 1. Offline (no game, no headset)
 

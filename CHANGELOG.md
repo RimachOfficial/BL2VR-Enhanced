@@ -6,6 +6,21 @@ where "version" tracks the mod (not the game).
 
 ## [Unreleased]
 
+## [0.1.8] — 2026-10-26
+
+### Added
+- `tests/` — the project's first unit-test suite (dependency-free, no framework):
+  `test_filters.cpp` covers all of `filters.h`, `test_ovrhook.cpp` covers the pure logic in
+  `ovrhook.cpp` (INI parser + config mapping, quaternion maths, stock solve, trigger polling,
+  and the full hook pipeline driven through a fake trampoline). `tests/run_tests.bat` builds
+  and runs both with MSVC; CI runs them on every push. 665 checks.
+
+### Fixed
+- `PollTrigger`: a failed `ovr_GetInputState` poll unlatched the gun trigger, grip and button
+  trigger but **not** the offhand trigger (`g_trigOff1000` stayed at its last value). With
+  `zoom_hand=offhand/either` a stale offhand value could keep the zoom gate "held" while polls
+  were failing. Found by the new `PollTrigger` unit tests.
+
 ## [0.1.7] — 2026-10-24
 
 Verified in game. **No behaviour changes** — the filter logic is exactly v0.1.6; this release

@@ -483,7 +483,7 @@ static void PollTrigger() {
     g_pollRcGun = rc;
     if (rc < 0) {
         // don't leave a previous trigger/grip value latched when polling fails
-        g_trigger1000 = 0; g_grip1000 = 0; g_btnTrig1000 = 0;
+        g_trigger1000 = 0; g_trigOff1000 = 0; g_grip1000 = 0; g_btnTrig1000 = 0;
         static int s_lastErr = 0;
         if (rc != s_lastErr)
             Bl2Log("ovr_GetInputState failed: %d (trigger gate unavailable)", rc);

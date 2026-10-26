@@ -219,6 +219,7 @@ version / controller. There is a built-in helper:
 | Tremor sweep (`tools/tremor_sweep.cpp`) | any C++17 compiler | `g++ -O2 -std=c++17 -I openvr_proxy tools/tremor_sweep.cpp -o tremor_sweep` |
 | Catch-up demo (`tools/catchup_demo.cpp`) | any C++17 compiler | `cl /O2 /EHsc /std:c++17 tools\catchup_demo.cpp` |
 | Log analysis (`tools/analyze_log.ps1`) | PowerShell (no build) | `powershell -File tools\analyze_log.ps1` |
+| Unit tests (`tests\`) | MSVC, x64 | `tests\run_tests.bat` |
 
 MinHook is vendored under `third_party\minhook-master\` (BSD-3-Clause); ImGui (MIT) under
 `tools\imguipanel\imgui\`. No package manager needed. `tools\ovr_proxy_legacy\` is the abandoned

@@ -18,6 +18,9 @@ jobs:
       - name: Build launcher/panel (bl2vr_panel.exe)
         run: tools\imguipanel\build.bat
 
+      - name: Run unit tests
+        run: tests\run_tests.bat
+
       - name: Collect release files
         shell: pwsh
         run: |
